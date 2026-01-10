@@ -32,12 +32,25 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
         run: |
+          run: |
+          # Debug: Show current directory
+          echo "Current directory: $(pwd)"
+          ls -la
+          
           # Create backups directory if it doesn't exist
+          echo "Creating database/backups directory..."
           mkdir -p database/backups
+          
+          # Debug: Verify it was created
+          echo "Checking if directory exists..."
+          ls -la database/
+          
           # Link to project
+          echo "Linking to Supabase project..."
           supabase link --project-ref $SUPABASE_PROJECT_ID --password $SUPABASE_DB_PASSWORD
           
           # Dump schema
+          echo "Dumping schema to database/backups/schema_backup_$(date +%Y%m%d).sql"
           supabase db dump --schema public > database/backups/schema_backup_$(date +%Y%m%d).sql
           
           # Keep only last 7 days of backups

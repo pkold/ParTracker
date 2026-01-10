@@ -23,7 +23,7 @@ jobs:
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client dnsutils
+          sudo apt-get install -y postgresql-client
           
       - name: Backup Database Schema
         env:
@@ -32,18 +32,14 @@ jobs:
         run: |
           mkdir -p database/backups
           
-          # Disable IPv6 for this session
-          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
-          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+          # Use pooler connection on port 6543 (supports both IPv4 and IPv6)
+          DB_HOST="aws-0-eu-central-1.pooler.supabase.com"
           
-          # Get IPv4 address only
-          DB_HOST=$(dig +short db.${SUPABASE_PROJECT_ID}.supabase.co A | head -1)
-          echo "Using IPv4 address: $DB_HOST"
-          
+          echo "Connecting to Supabase pooler..."
           PGPASSWORD=$SUPABASE_DB_PASSWORD pg_dump \
             -h "$DB_HOST" \
-            -p 5432 \
-            -U postgres \
+            -p 6543 \
+            -U "postgres.${SUPABASE_PROJECT_ID}" \
             -d postgres \
             --schema-only \
             --schema=public \

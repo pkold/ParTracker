@@ -1,6 +1,8 @@
 name: Backup Supabase Schema
 
 on:
+  schedule:
+    - cron: '0 3 * * *'
   workflow_dispatch:
   push:
     branches:
@@ -18,31 +20,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Debug - Show everything
-        run: |
-          echo "=== Current directory ==="
-          pwd
-          echo ""
-          echo "=== List current directory ==="
-          ls -la
-          echo ""
-          echo "=== Does database/ exist? ==="
-          ls -la database/ || echo "database/ does not exist"
-          echo ""
-          echo "=== Does database/backups/ exist? ==="
-          ls -la database/backups/ || echo "database/backups/ does not exist"
-          echo ""
-          echo "=== Creating database/backups/ ==="
-          mkdir -p database/backups
-          echo ""
-          echo "=== After mkdir, does it exist? ==="
-          ls -la database/backups/
-          echo ""
-          echo "=== Can we write to it? ==="
-          echo "test" > database/backups/test.txt
-          cat database/backups/test.txt
-          echo "✅ Write test successful!"
-          
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
@@ -53,9 +30,14 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
         run: |
-          echo "Starting backup..."
+          mkdir -p database/backups
+          
+          # Get IPv4 address
+          DB_HOST=$(getent ahosts db.${SUPABASE_PROJECT_ID}.supabase.co | grep STREAM | head -1 | awk '{print $1}')
+          echo "Connecting to: $DB_HOST"
+          
           PGPASSWORD=$SUPABASE_DB_PASSWORD pg_dump \
-            -h db.${SUPABASE_PROJECT_ID}.supabase.co \
+            -h "$DB_HOST" \
             -p 5432 \
             -U postgres \
             -d postgres \
@@ -64,5 +46,22 @@ jobs:
             --no-owner \
             --no-privileges \
             -f database/backups/schema_backup_$(date +%Y%m%d).sql
-          echo "Backup completed!"
-          ls -la database/backups/
+          
+          echo "✅ Backup completed!"
+          ls -lh database/backups/schema_backup_$(date +%Y%m%d).sql
+          
+          # Keep only last 7 days of backups
+          cd database/backups
+          ls -t schema_backup_*.sql | tail -n +8 | xargs -r rm || true
+          
+      - name: Commit and Push Changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add database/backups/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🔄 Automatic schema backup $(date +%Y-%m-%d)"
+            git push
+          fi

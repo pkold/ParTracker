@@ -1,8 +1,6 @@
 name: Backup Supabase Schema
 
 on:
-  schedule:
-    - cron: '0 3 * * *'
   workflow_dispatch:
   push:
     branches:
@@ -20,6 +18,31 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           
+      - name: Debug - Show everything
+        run: |
+          echo "=== Current directory ==="
+          pwd
+          echo ""
+          echo "=== List current directory ==="
+          ls -la
+          echo ""
+          echo "=== Does database/ exist? ==="
+          ls -la database/ || echo "database/ does not exist"
+          echo ""
+          echo "=== Does database/backups/ exist? ==="
+          ls -la database/backups/ || echo "database/backups/ does not exist"
+          echo ""
+          echo "=== Creating database/backups/ ==="
+          mkdir -p database/backups
+          echo ""
+          echo "=== After mkdir, does it exist? ==="
+          ls -la database/backups/
+          echo ""
+          echo "=== Can we write to it? ==="
+          echo "test" > database/backups/test.txt
+          cat database/backups/test.txt
+          echo "✅ Write test successful!"
+          
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
@@ -30,7 +53,7 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
         run: |
-          mkdir -p database/backups
+          echo "Starting backup..."
           PGPASSWORD=$SUPABASE_DB_PASSWORD pg_dump \
             -h db.${SUPABASE_PROJECT_ID}.supabase.co \
             -p 5432 \
@@ -41,17 +64,5 @@ jobs:
             --no-owner \
             --no-privileges \
             -f database/backups/schema_backup_$(date +%Y%m%d).sql
-          cd database/backups
-          ls -t schema_backup_*.sql | tail -n +8 | xargs -r rm || true
-          
-      - name: Commit and Push Changes
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add database/backups/
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "🔄 Automatic schema backup $(date +%Y-%m-%d)"
-            git push
-          fi
+          echo "Backup completed!"
+          ls -la database/backups/

@@ -20,43 +20,36 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Install PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-          
-      - name: Configure IPv4 preference
-        run: |
-          # Prefer IPv4 over IPv6 system-wide
-          echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
           
       - name: Backup Database Schema
         env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
         run: |
+          set -e
           mkdir -p database/backups
           
-          DB_HOST="db.${SUPABASE_PROJECT_ID}.supabase.co"
-          echo "Connecting to: $DB_HOST"
+          # Link to project
+          supabase link --project-ref $SUPABASE_PROJECT_ID --password $SUPABASE_DB_PASSWORD
           
-          PGPASSWORD=$SUPABASE_DB_PASSWORD pg_dump \
-            -h "$DB_HOST" \
-            -p 5432 \
-            -U postgres \
-            -d postgres \
-            --schema-only \
-            --schema=public \
-            --no-owner \
-            --no-privileges \
-            -f database/backups/schema_backup_$(date +%Y%m%d).sql
+          # Dump schema to temporary file first
+          TEMP_FILE=$(mktemp)
+          supabase db dump --schema public > "$TEMP_FILE"
+          
+          # Move to final location
+          mv "$TEMP_FILE" database/backups/schema_backup_$(date +%Y%m%d).sql
           
           echo "✅ Backup completed!"
           ls -lh database/backups/schema_backup_$(date +%Y%m%d).sql
           
           # Keep only last 7 days of backups
           cd database/backups
-          ls -t schema_backup_*.sql | tail -n +8 | xargs -r rm || true
+          ls -t schema_backup_*.sql 2>/dev/null | tail -n +8 | xargs -r rm || true
           
       - name: Commit and Push Changes
         run: |

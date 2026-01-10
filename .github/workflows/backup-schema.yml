@@ -2,9 +2,8 @@ name: Backup Supabase Schema
 
 on:
   schedule:
-    # Run daily at 3 AM UTC (4 AM Danish time)
     - cron: '0 3 * * *'
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -21,22 +20,29 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: latest
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
           
       - name: Backup Database Schema
         env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
         run: |
-          supabase link --project-ref $SUPABASE_PROJECT_ID --password $SUPABASE_DB_PASSWORD
           mkdir -p database/backups
-          supabase db dump --schema public --file database/backups/schema_backup_$(date +%Y%m%d).sql
+          PGPASSWORD=$SUPABASE_DB_PASSWORD pg_dump \
+            -h db.${SUPABASE_PROJECT_ID}.supabase.co \
+            -p 5432 \
+            -U postgres \
+            -d postgres \
+            --schema-only \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            -f database/backups/schema_backup_$(date +%Y%m%d).sql
           cd database/backups
-          ls -t schema_backup_*.sql | tail -n +8 | xargs -r rm
+          ls -t schema_backup_*.sql | tail -n +8 | xargs -r rm || true
           
       - name: Commit and Push Changes
         run: |

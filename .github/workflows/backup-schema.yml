@@ -23,7 +23,7 @@ jobs:
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client
+          sudo apt-get install -y postgresql-client dnsutils
           
       - name: Backup Database Schema
         env:
@@ -32,9 +32,13 @@ jobs:
         run: |
           mkdir -p database/backups
           
-          # Get IPv4 address
-          DB_HOST=$(getent ahosts db.${SUPABASE_PROJECT_ID}.supabase.co | grep STREAM | head -1 | awk '{print $1}')
-          echo "Connecting to: $DB_HOST"
+          # Disable IPv6 for this session
+          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+          
+          # Get IPv4 address only
+          DB_HOST=$(dig +short db.${SUPABASE_PROJECT_ID}.supabase.co A | head -1)
+          echo "Using IPv4 address: $DB_HOST"
           
           PGPASSWORD=$SUPABASE_DB_PASSWORD pg_dump \
             -h "$DB_HOST" \

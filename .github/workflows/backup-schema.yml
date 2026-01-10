@@ -23,7 +23,12 @@ jobs:
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client dnsutils iputils-ping
+          sudo apt-get install -y postgresql-client
+          
+      - name: Configure IPv4 preference
+        run: |
+          # Prefer IPv4 over IPv6 system-wide
+          echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf
           
       - name: Backup Database Schema
         env:
@@ -32,17 +37,9 @@ jobs:
         run: |
           mkdir -p database/backups
           
-          # Resolve to IPv4 using nslookup
-          DB_HOST=$(nslookup db.${SUPABASE_PROJECT_ID}.supabase.co | grep -A1 "Name:" | grep "Address:" | grep -v "#" | awk '{print $2}' | grep -v ":" | head -1)
+          DB_HOST="db.${SUPABASE_PROJECT_ID}.supabase.co"
+          echo "Connecting to: $DB_HOST"
           
-          if [ -z "$DB_HOST" ]; then
-            echo "Failed to resolve IPv4 address, using hostname directly"
-            DB_HOST="db.${SUPABASE_PROJECT_ID}.supabase.co"
-          else
-            echo "Resolved IPv4 address: $DB_HOST"
-          fi
-          
-          echo "Connecting to Supabase database..."
           PGPASSWORD=$SUPABASE_DB_PASSWORD pg_dump \
             -h "$DB_HOST" \
             -p 5432 \

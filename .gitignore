@@ -1,0 +1,56 @@
+# Environment variables
+.env
+.env.local
+.env.production
+.env.development
+
+# Supabase
+.supabase/
+supabase/.env
+
+# Credentials
+*.key
+*.pem
+credentials.json
+secrets.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node modules (for Edge Functions)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Build outputs
+dist/
+build/
+*.js.map
+
+# Backups
+# Keep automatic backups but ignore manual ones
+database/backups/manual_*.sql
+database/backups/*.dump
+# Track automatic backups (schema_backup_*.sql)
+
+# Personal notes
+NOTES.md
+TODO.md
+scratch.md

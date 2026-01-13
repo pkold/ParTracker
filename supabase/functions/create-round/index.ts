@@ -13,23 +13,30 @@ serve(async (req) => {
   }
 
   try {
-    // Create Supabase client
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      {
-        global: {
-          headers: { Authorization: req.headers.get('Authorization')! },
-        },
-      }
-    )
+   // Create Supabase admin client (bypasses RLS)
+const supabaseAdmin = createClient(
+  Deno.env.get('SUPABASE_URL') ?? '',
+  Deno.env.get('SERVICE_ROLE_KEY') ?? ''
+)
 
-    // Get user
+// Create user client for auth verification
+const supabaseUser = createClient(
+  Deno.env.get('SUPABASE_URL') ?? '',
+  Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+  {
+    global: {
+      headers: { Authorization: req.headers.get('Authorization')! },
+    },
+  }
+)
+
+    // Get authenticated user from JWT
     const {
       data: { user },
-    } = await supabaseClient.auth.getUser()
+      error: authError,
+    } = await supabaseUser.auth.getUser()
 
-    if (!user) {
+    if (!user || authError) {
       throw new Error('Not authenticated')
     }
 
@@ -56,7 +63,7 @@ serve(async (req) => {
     }
 
     // Get course and tee info for handicap calculation
-    const { data: tee, error: teeError } = await supabaseClient
+    const { data: tee, error: teeError } = await supabaseAdmin
       .from('course_tees')
       .select('slope_rating, course_rating, par')
       .eq('id', tee_id)
@@ -67,7 +74,7 @@ serve(async (req) => {
     }
 
     // Create round
-    const { data: round, error: roundError } = await supabaseClient
+    const { data: round, error: roundError } = await supabaseAdmin
       .from('rounds')
       .insert({
         course_id,
@@ -95,7 +102,7 @@ serve(async (req) => {
     const roundPlayers = []
     for (const player of players) {
       // Calculate playing handicap using WHS formula
-      const { data: playingHcp } = await supabaseClient.rpc(
+      const { data: playingHcp } = await supabaseAdmin.rpc(
         'calculate_playing_hcp',
         {
           p_handicap_index: player.handicap_index,
@@ -108,7 +115,7 @@ serve(async (req) => {
       )
 
       // Insert round_player
-      const { data: roundPlayer, error: rpError } = await supabaseClient
+      const { data: roundPlayer, error: rpError } = await supabaseAdmin
         .from('round_players')
         .insert({
           round_id: round.id,
@@ -129,7 +136,7 @@ serve(async (req) => {
     }
 
     // Get initial snapshot
-    const { data: snapshot, error: snapshotError } = await supabaseClient.rpc(
+    const { data: snapshot, error: snapshotError } = await supabaseAdmin.rpc(
       'recalculate_round',
       { p_round_id: round.id }
     )

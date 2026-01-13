@@ -12,7 +12,14 @@ serve(async (req) => {
   }
 
   try {
-    const supabaseClient = createClient(
+    // Create Supabase admin client (bypasses RLS)
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SERVICE_ROLE_KEY') ?? ''
+    )
+
+    // Create user client for auth verification
+    const supabaseUser = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       {
@@ -22,9 +29,10 @@ serve(async (req) => {
       }
     )
 
+    // Get authenticated user from JWT
     const {
       data: { user },
-    } = await supabaseClient.auth.getUser()
+    } = await supabaseUser.auth.getUser()
 
     if (!user) {
       throw new Error('Not authenticated')
@@ -45,16 +53,17 @@ serve(async (req) => {
     }
 
     // Verify user has access to this round
-    const { data: hasAccess } = await supabaseClient.rpc('is_round_member', {
-      p_round_id: round_id,
-    })
+const { data: hasAccess } = await supabaseAdmin.rpc('is_round_member', {
+  p_round_id: round_id,
+  p_user_id: user.id,
+})
 
-    if (!hasAccess) {
-      throw new Error('Not authorized to update this round')
-    }
+if (!hasAccess) {
+  throw new Error('Not authorized to update this round')
+}
 
     // Upsert score (insert or update if exists)
-    const { error: scoreError } = await supabaseClient
+    const { error: scoreError } = await supabaseAdmin
       .from('scores')
       .upsert(
         {
@@ -75,7 +84,7 @@ serve(async (req) => {
     }
 
     // Recalculate round results
-    const { data: snapshot, error: recalcError } = await supabaseClient.rpc(
+    const { data: snapshot, error: recalcError } = await supabaseAdmin.rpc(
       'recalculate_round',
       { p_round_id: round_id }
     )

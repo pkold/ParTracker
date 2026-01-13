@@ -12,7 +12,14 @@ serve(async (req) => {
   }
 
   try {
-    const supabaseClient = createClient(
+    // Create Supabase admin client (bypasses RLS)
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SERVICE_ROLE_KEY') ?? ''
+    )
+
+    // Create user client for auth verification
+    const supabaseUser = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       {
@@ -22,9 +29,10 @@ serve(async (req) => {
       }
     )
 
+    // Get authenticated user from JWT
     const {
       data: { user },
-    } = await supabaseClient.auth.getUser()
+    } = await supabaseUser.auth.getUser()
 
     if (!user) {
       throw new Error('Not authenticated')
@@ -39,21 +47,22 @@ serve(async (req) => {
     }
 
     // Verify user has access to this round
-    const { data: hasAccess } = await supabaseClient.rpc('is_round_member', {
-      p_round_id: round_id,
-    })
+const { data: hasAccess } = await supabaseAdmin.rpc('is_round_member', {
+  p_round_id: round_id,
+  p_user_id: user.id,
+})
 
-    if (!hasAccess) {
-      throw new Error('Not authorized to view this round')
-    }
+if (!hasAccess) {
+  throw new Error('Not authorized to view this round')
+}
 
     // Get round details
-    const { data: round, error: roundError } = await supabaseClient
+    const { data: round, error: roundError } = await supabaseAdmin
       .from('rounds')
       .select(`
         *,
         course:courses(id, name),
-        tee:course_tees(id, name, color, par, slope_rating, course_rating, holes)
+        tee:course_tees(id, tee_name, tee_color, par, slope_rating, course_rating, holes)
       `)
       .eq('id', round_id)
       .single()
@@ -63,12 +72,11 @@ serve(async (req) => {
     }
 
     // Get players
-    const { data: players, error: playersError } = await supabaseClient
+    const { data: players, error: playersError } = await supabaseAdmin
       .from('round_players')
       .select(`
         *,
-        player:players(id, name, email),
-        team:teams(id, name)
+        player:players(id, display_name, email)
       `)
       .eq('round_id', round_id)
 
@@ -77,7 +85,7 @@ serve(async (req) => {
     }
 
     // Get scores
-    const { data: scores, error: scoresError } = await supabaseClient
+    const { data: scores, error: scoresError } = await supabaseAdmin
       .from('scores')
       .select('*')
       .eq('round_id', round_id)
@@ -88,7 +96,7 @@ serve(async (req) => {
     }
 
     // Get hole results
-    const { data: holeResults, error: holeError } = await supabaseClient
+    const { data: holeResults, error: holeError } = await supabaseAdmin
       .from('hole_results')
       .select('*')
       .eq('round_id', round_id)
@@ -99,7 +107,7 @@ serve(async (req) => {
     }
 
     // Get round results (player totals)
-    const { data: roundResults, error: resultsError } = await supabaseClient
+    const { data: roundResults, error: resultsError } = await supabaseAdmin
       .from('round_results')
       .select('*')
       .eq('round_id', round_id)
@@ -111,7 +119,7 @@ serve(async (req) => {
     // Get team results (if team mode)
     let teamResults = null
     if (round.team_mode !== 'individual') {
-      const { data: teams, error: teamsError } = await supabaseClient
+      const { data: teams, error: teamsError } = await supabaseAdmin
         .from('team_results')
         .select('*, team:teams(id, name)')
         .eq('round_id', round_id)
@@ -124,11 +132,11 @@ serve(async (req) => {
     // Get skins results (if enabled)
     let skinsResults = null
     if (round.skins_enabled) {
-      const { data: skins, error: skinsError } = await supabaseClient
+      const { data: skins, error: skinsError } = await supabaseAdmin
         .from('skins_results')
         .select(`
           *,
-          winner_player:players!winner_player_id(id, name),
+          winner_player:players!winner_player_id(id, display_name),
           winner_team:teams!winner_team_id(id, name)
         `)
         .eq('round_id', round_id)

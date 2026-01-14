@@ -1,159 +1,286 @@
-# FuldNyborg Golf Scoring App - Backend
+# FuldNyborg Golf Scoring App
 
-Supabase backend for FuldNyborg Golf Scoring Application.
+A comprehensive golf scoring system built on Supabase with support for WHS handicapping, stableford scoring, team modes, and skins games.
+
+## 🎯 Features
+
+### Core Functionality
+- **WHS Handicap System** - Automatic playing handicap calculation using World Handicap System formulas
+- **Multiple Scoring Formats** - Stableford, stroke play, match play
+- **Team Modes** - Individual, 2v2, 3v3, 4v4 best ball
+- **Skins Games** - NET/GROSS scoring with carryover support
+- **Real-time Calculation** - Automatic score recalculation on every update
+- **Multi-round Tournaments** - Track results across multiple rounds
+
+### Technical Features
+- **RESTful API** - Edge Functions for all operations
+- **Row Level Security** - Database-level access control
+- **Offline Support** - Client-event-id based idempotency
+- **Type Safety** - PostgreSQL functions with proper types
+- **Automated Backups** - Nightly schema backups via GitHub Actions
 
 ## 🏗️ Architecture
 
-- **Database:** PostgreSQL (Supabase)
-- **Functions:** Supabase Edge Functions
-- **Auth:** Supabase Auth (Email OTP)
-- **Storage:** Supabase Storage (future)
+```
+┌─────────────────────────────────────────────┐
+│           Frontend (Future)                 │
+│  React/Vue/Mobile App                       │
+└─────────────────┬───────────────────────────┘
+                  │
+                  │ HTTPS/JWT
+                  ▼
+┌─────────────────────────────────────────────┐
+│         Supabase Edge Functions             │
+│  • create-round                             │
+│  • save-score                               │
+│  • get-snapshot                             │
+└─────────────────┬───────────────────────────┘
+                  │
+                  │ PostgreSQL
+                  ▼
+┌─────────────────────────────────────────────┐
+│           Supabase Database                 │
+│  • 19 tables                                │
+│  • RLS policies                             │
+│  • PostgreSQL functions                     │
+│  • Automated calculations                   │
+└─────────────────────────────────────────────┘
+```
 
 ## 📊 Database Schema
 
 ### Core Tables
-- `players` - Golf players with handicap index
-- `courses` - Golf courses
-- `course_tees` - Tee-specific data (slope, rating, holes as JSONB)
-- `rounds` - Game sessions
-- `scores` - Raw stroke input per hole
-- `round_players` - Player membership in rounds
+- **courses** - Golf courses
+- **course_tees** - Tee boxes with ratings
+- **players** - Player profiles
+- **rounds** - Golf rounds/games
+- **round_players** - Players in a round
+- **teams** - Team definitions
+- **scores** - Raw stroke data
 
-### Results Tables (Calculated)
-- `hole_results` - Per-hole calculations (net, stableford)
-- `round_results` - Player totals
-- `team_results` - Team totals (bestball/aggregate)
-- `skins_results` - Skins winners with carryover
+### Result Tables (Auto-calculated)
+- **hole_results** - Per-hole calculated results
+- **round_results** - Player totals
+- **team_results** - Team totals
+- **skins_results** - Skins winners per hole
 
-### Sidegames & Tournaments
-- `sidegame_types` - Sidegame definitions
-- `sidegame_events` - Sidegame occurrences
-- `tournaments` - Multi-round competitions
-- `tournament_standings` - Leaderboards
+See [docs/DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md) for complete schema documentation.
 
-## 🚀 Setup Instructions
+## 🚀 API Endpoints
 
-### 1. Create Supabase Project
+All Edge Functions require JWT authentication via Supabase Auth.
+
+### POST /functions/v1/create-round
+Creates a new golf round with players.
+
+**Request:**
+```json
+{
+  "course_id": "uuid",
+  "tee_id": "uuid",
+  "players": [
+    {
+      "player_id": "uuid",
+      "handicap_index": 5.2
+    }
+  ],
+  "holes_played": 18,
+  "skins_enabled": true,
+  "skins_type": "net"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "round_id": "uuid",
+  "round": {...},
+  "players": [...],
+  "snapshot": {...}
+}
+```
+
+### POST /functions/v1/save-score
+Saves a score and triggers recalculation.
+
+**Request:**
+```json
+{
+  "round_id": "uuid",
+  "player_id": "uuid",
+  "hole_no": 1,
+  "strokes": 4,
+  "client_event_id": "uuid" // Optional, for offline sync
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "round_id": "uuid",
+  "snapshot": {
+    "holes_calculated": 1,
+    "skins_calculated": 1,
+    "players_calculated": 4
+  }
+}
+```
+
+### GET /functions/v1/get-snapshot?round_id=uuid
+Retrieves complete round status.
+
+**Response:**
+```json
+{
+  "success": true,
+  "round": {...},
+  "players": [...],
+  "scores": [...],
+  "hole_results": [...],
+  "round_results": [...],
+  "team_results": [...],
+  "skins_results": [...]
+}
+```
+
+See [docs/API.md](docs/API.md) for complete API documentation.
+
+## 🛠️ Setup
+
+### Prerequisites
+- Node.js 18+
+- Supabase account
+- Supabase CLI
+
+### Installation
+
+1. **Clone repository:**
 ```bash
-# Go to https://supabase.com
-# Create new project
-# Note your project URL and API keys
+git clone https://github.com/pkold/fuldnyborg-app.git
+cd fuldnyborg-app
 ```
 
-### 2. Run Migrations (in order)
-```sql
--- In Supabase SQL Editor, run these in order:
-database/migrations/001_initial_schema.sql
-database/migrations/002_rounds_scoring.sql
-database/migrations/003_sidegames.sql
-database/migrations/004_tournaments.sql
-database/migrations/005_rls_policies.sql
-database/migrations/006_test_data.sql
+2. **Install Supabase CLI:**
+```bash
+brew install supabase/tap/supabase
 ```
 
-### 3. Deploy Functions
-```sql
--- In Supabase SQL Editor:
-database/functions/calculate_functions.sql
-database/functions/recalculate_round.sql
-database/functions/add_winner_team_id.sql
-database/functions/fix_bestball_and_team_skins.sql
+3. **Login to Supabase:**
+```bash
+supabase login
 ```
 
-### 4. Verify Setup
-```sql
--- Check tables exist
-SELECT COUNT(*) FROM information_schema.tables 
-WHERE table_schema = 'public';
--- Should return 19
-
--- Check test data
-SELECT * FROM courses WHERE name = 'Nyborg Golf Club';
-SELECT * FROM players;
+4. **Link to your project:**
+```bash
+supabase link --project-ref YOUR_PROJECT_REF
 ```
+
+5. **Run migrations:**
+```bash
+# Apply all migrations in order
+psql -h db.YOUR_PROJECT_REF.supabase.co -U postgres -d postgres -f database/migrations/001_core_tables.sql
+psql -h db.YOUR_PROJECT_REF.supabase.co -U postgres -d postgres -f database/migrations/002_team_tables.sql
+# ... (run all migrations in order)
+```
+
+6. **Deploy Edge Functions:**
+```bash
+supabase functions deploy create-round
+supabase functions deploy save-score
+supabase functions deploy get-snapshot
+```
+
+7. **Set secrets:**
+```bash
+supabase secrets set SERVICE_ROLE_KEY="your-service-role-key"
+```
+
+See [docs/SETUP.md](docs/SETUP.md) for detailed setup instructions.
 
 ## 🧪 Testing
 
-Run test queries from `database/tests/`:
-- `test_round_creation.sql` - Basic round creation and scoring
-- `test_skins_carryover.sql` - Skins rollover logic
-- `test_2v2_bestball.sql` - Team bestball scoring
-- `test_team_skins.sql` - Team skins with carryover
+### Run end-to-end test:
+```bash
+./test_complete_flow.sh
+```
 
-## 📐 Key Functions
+### Create test round:
+```bash
+./create_new_round.sh
+```
 
-### `calculate_playing_hcp(handicap_index, slope, rating, par, allowance, holes)`
-Converts WHS handicap index to playing handicap for specific tee.
+## 📁 Project Structure
 
-### `calculate_strokes_received(playing_hcp, stroke_index, holes_played)`
-Determines handicap strokes per hole based on stroke index.
-
-### `calculate_stableford_points(net_strokes, par)`
-Converts net score to stableford points.
-
-### `recalculate_round(round_id)`
-**Main scoring engine.** Recalculates all results for a round:
-- Hole-by-hole results (net, stableford)
-- Player totals
-- Team results (bestball gross/net/points)
-- Skins (individual or team, with carryover)
-
-Returns JSONB summary of calculations performed.
-
-## 🎯 Features
-
-### ✅ Completed (E0: Foundations)
-- [x] Database schema (19 tables)
-- [x] Row Level Security (RLS) policies
-- [x] Core calculation functions (WHS)
-- [x] Scoring engine (individual + teams)
-- [x] Skins (NET/GROSS, carryover, team support)
-- [x] Bestball team scoring
-- [x] Test data (Nyborg Golf Club + players)
-
-### 🔄 In Progress (E1: Core API)
-- [ ] Edge Function: create-round
-- [ ] Edge Function: save-score
-- [ ] Edge Function: get-snapshot
-
-### 📋 Planned
-- [ ] Offline sync (batch upload)
-- [ ] Sidegames API
-- [ ] Tournament API
-- [ ] Frontend (PWA)
-
-## 📚 Documentation
-
-See `/docs` folder for:
-- API specifications (coming soon)
-- Architecture decisions
-- Testing guides
-
-## 🔄 Automatic Backups
-
-This repository uses GitHub Actions to automatically backup the Supabase schema:
-- **Schedule:** Daily at 3 AM UTC
-- **Location:** `database/backups/schema_backup_YYYYMMDD.sql`
-- **Retention:** Last 7 days
-
-**Setup:** See [docs/GITHUB_ACTIONS_SETUP.md](docs/GITHUB_ACTIONS_SETUP.md) for configuration instructions.
+```
+fuldnyborg-app/
+├── .github/
+│   └── workflows/
+│       └── backup-schema.yml        # Automated nightly backups
+├── database/
+│   ├── migrations/                  # SQL migrations (001-006)
+│   ├── functions/                   # PostgreSQL functions
+│   ├── tests/                       # Database tests
+│   └── backups/                     # Nightly schema backups
+├── supabase/
+│   ├── config.toml                  # Supabase configuration
+│   └── functions/                   # Edge Functions
+│       ├── create-round/
+│       ├── save-score/
+│       └── get-snapshot/
+├── docs/                            # Documentation
+├── test_complete_flow.sh            # E2E test script
+└── README.md
+```
 
 ## 🔐 Security
 
-- All tables protected by RLS policies
-- Users can only see rounds they created or are members of
-- Service role required for Edge Functions
-- Sensitive credentials stored in GitHub Secrets
+- **JWT Authentication** - All Edge Functions require valid JWT
+- **Row Level Security** - Database policies enforce access control
+- **Authorization Checks** - `is_round_member()` verifies access
+- **Service Role Protection** - Admin operations use SERVICE_ROLE_KEY
+- **Secrets Management** - Sensitive keys stored in Supabase secrets
+
+## 🎓 Key Concepts
+
+### WHS Handicap Calculation
+Playing handicap = (Handicap Index × Slope Rating / 113 + (Course Rating - Par)) × Handicap Allowance
+
+For 9 holes, divide by 2.
+
+### Stableford Scoring
+- Double bogey or worse: 0 points
+- Bogey: 1 point
+- Par: 2 points
+- Birdie: 3 points
+- Eagle: 4 points
+- Albatross: 5 points
+
+### Skins Games
+- **NET mode**: Uses net strokes (gross - handicap strokes)
+- **GROSS mode**: Uses gross strokes
+- **Carryover**: Ties result in carry to next hole
+
+## 📝 Development Status
+
+- ✅ E0: Foundations (100%)
+- ✅ E1: Core API (100%)
+- ⬜ E6: Frontend (0%)
+- ⬜ Documentation (In Progress)
 
 ## 🤝 Contributing
 
-This is a private project. Contact @pkold for access.
+This is a private project. Contact the owner for access.
 
-## 📝 License
+## 📄 License
 
 Private - All Rights Reserved
 
+## 🙋 Support
+
+For questions or issues, contact: peter@fuldnyborg.dk
+
 ---
 
-**Last Updated:** January 10, 2026  
-**Status:** Backend Complete (E0), Ready for Edge Functions (E1)
+**Built with ❤️ using Supabase**

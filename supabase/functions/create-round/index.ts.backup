@@ -1,0 +1,237 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  try {
+    // Create Supabase admin client (bypasses RLS)
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SERVICE_ROLE_KEY') ?? ''
+    )
+
+    // Create user client for auth verification
+    const supabaseUser = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      {
+        global: {
+          headers: { Authorization: req.headers.get('Authorization')! },
+        },
+      }
+    )
+
+    // Get authenticated user from JWT
+    const {
+      data: { user },
+      error: authError,
+    } = await supabaseUser.auth.getUser()
+
+    if (!user || authError) {
+      throw new Error('Not authenticated')
+    }
+
+    // Parse request body
+    const body = await req.json()
+    console.log('Received payload:', JSON.stringify(body, null, 2))
+
+    const {
+      course_id,
+      players, // [{player_id, handicap_index, tee_color}]
+      game_types = [], // ['stroke_play', 'stableford', 'match_play']
+      teams = null,
+      holes_played = 18,
+      start_hole = 1,
+      handicap_allowance = 1.0,
+    } = body
+
+    // Validation
+    if (!course_id || !players || players.length === 0) {
+      throw new Error('Missing required fields: course_id, players')
+    }
+
+    // Map game_types to database fields
+    const scoring_format = game_types.includes('stableford') ? 'stableford' : 'strokeplay'
+    const skins_enabled = game_types.includes('match_play') // Using match_play as skins for now
+    const team_mode = teams ? 'team' : 'individual'
+
+    console.log('Mapped settings:', { scoring_format, skins_enabled, team_mode })
+
+    // Get course info (we'll need this to look up tees)
+    const { data: course, error: courseError } = await supabaseAdmin
+      .from('courses')
+      .select('*')
+      .eq('id', course_id)
+      .single()
+
+    if (courseError || !course) {
+      throw new Error('Course not found')
+    }
+
+    console.log('Course found:', course.name)
+
+    // Create round (without tee_id since players have different tees)
+    const { data: round, error: roundError } = await supabaseAdmin
+      .from('rounds')
+      .insert({
+        course_id,
+        tee_id: null, // We'll use per-player tees instead
+        created_by: user.id,
+        holes_played,
+        start_hole,
+        handicap_allowance,
+        scoring_format,
+        team_mode,
+        team_scoring_mode: 'aggregate',
+        skins_enabled,
+        skins_type: 'net',
+        skins_rollover: true,
+        status: 'active',
+      })
+      .select()
+      .single()
+
+    if (roundError) {
+      console.error('Round creation error:', roundError)
+      throw roundError
+    }
+
+    console.log('Round created:', round.id)
+
+    // Process each player with their specific tee
+    const roundPlayers = []
+    for (const player of players) {
+      console.log(`Processing player: ${player.player_id}, tee: ${player.tee_color}`)
+
+      // Look up tee_id from course_tees based on course_id and tee color
+      // Map tee colors to tee names (you might need to adjust these)
+
+      const { data: tee, error: teeError } = await supabaseAdmin
+        .from('course_tees')
+        .select('*')
+        .eq('course_id', course_id)
+        .eq('tee_color', player.tee_color)
+        .single()
+
+      if (teeError || !tee) {
+        console.error(`Tee not found for ${teeName}:`, teeError)
+        // Fallback: try to get any tee for this course
+        const { data: fallbackTee } = await supabaseAdmin
+          .from('course_tees')
+          .select('*')
+          .eq('course_id', course_id)
+          .limit(1)
+          .single()
+
+        if (!fallbackTee) {
+          throw new Error(`No tees found for course ${course_id}`)
+        }
+
+        console.log(`Using fallback tee: ${fallbackTee.tee_name}`)
+        // Use fallback tee
+        var teeToUse = fallbackTee
+      } else {
+        var teeToUse = tee
+      }
+
+      console.log(`Using tee: ${teeToUse.tee_name}, slope: ${teeToUse.slope_rating}`)
+
+      // Calculate playing handicap using WHS formula
+      const { data: playingHcp, error: hcpError } = await supabaseAdmin.rpc(
+        'calculate_playing_hcp',
+        {
+          p_handicap_index: player.handicap_index || 0,
+          p_slope_rating: teeToUse.slope_rating,
+          p_course_rating: teeToUse.course_rating,
+          p_par: teeToUse.par,
+          p_handicap_allowance: handicap_allowance,
+          p_holes_played: holes_played,
+        }
+      )
+
+      if (hcpError) {
+        console.error('Handicap calculation error:', hcpError)
+      }
+
+      console.log(`Playing handicap: ${playingHcp}`)
+
+      // Determine team_id if teams are enabled
+      let team_id = null
+      if (teams && player.team) {
+        team_id = player.team // player.team is 1 or 2 from mobile app
+      }
+
+      // Insert round_player
+      const { data: roundPlayer, error: rpError } = await supabaseAdmin
+        .from('round_players')
+        .insert({
+          round_id: round.id,
+          player_id: player.player_id,
+          user_id: player.user_id || null,
+          role: player.player_id === user.id ? 'owner' : 'player',
+          playing_hcp: playingHcp || 0,
+          team_id: team_id,
+          tee_id: teeToUse.id, // Store which tee this player is using
+        })
+        .select()
+        .single()
+
+      if (rpError) {
+        console.error('Round player insertion error:', rpError)
+        throw rpError
+      }
+
+      console.log(`Player added to round: ${roundPlayer.id}`)
+      roundPlayers.push(roundPlayer)
+    }
+
+    console.log(`All ${roundPlayers.length} players added successfully`)
+
+    // Get initial snapshot
+    const { data: snapshot, error: snapshotError } = await supabaseAdmin.rpc(
+      'recalculate_round',
+      { p_round_id: round.id }
+    )
+
+    if (snapshotError) {
+      console.error('Snapshot error:', snapshotError)
+    }
+
+    console.log('Round creation complete!')
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        round_id: round.id,
+        round,
+        players: roundPlayers,
+        snapshot,
+      }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      }
+    )
+  } catch (error) {
+    console.error('Edge Function error:', error.message)
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: error.message,
+      }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 400,
+      }
+    )
+  }
+})

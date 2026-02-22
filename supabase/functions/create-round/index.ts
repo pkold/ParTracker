@@ -96,7 +96,7 @@ serve(async (req) => {
     // NOT a separate sidegames table.
 
     // Determine scoring format from game_types
-    const hasSkins = game_types?.includes('skins') || false
+    const hasMatchPlay = game_types?.includes('match_play') || false
     const hasStableford = game_types?.includes('stableford') || true // Default
 
     // Determine team mode
@@ -117,7 +117,7 @@ serve(async (req) => {
       team_mode: teamMode,
       team_scoring_mode: isTeamPlay ? 'bestball' : 'bestball', // Default
       // Skins configuration
-      skins_enabled: hasSkins,
+      skins_enabled: hasMatchPlay && carryover_enabled,
       skins_type: 'net',                      // Default to net skins
       skins_rollover: carryover_enabled || true,
       // Visibility

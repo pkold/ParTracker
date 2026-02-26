@@ -116,6 +116,8 @@ serve(async (req) => {
       // Team configuration
       team_mode: teamMode,
       team_scoring_mode: isTeamPlay ? 'bestball' : 'bestball', // Default
+      // Match play configuration
+      match_play_enabled: hasMatchPlay,
       // Skins configuration
       skins_enabled: hasMatchPlay && carryover_enabled,
       skins_type: 'net',                      // Default to net skins

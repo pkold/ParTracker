@@ -31,4 +31,16 @@ entrypoint = "./functions/get-snapshot/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/get-snapshot/*.html" ]
+[functions.create-tournament]
+enabled = true
+verify_jwt = false
+import_map = "./functions/create-tournament/deno.json"
+entrypoint = "./functions/create-tournament/index.ts"
+
+[functions.calculate-standings]
+enabled = true
+verify_jwt = false
+import_map = "./functions/calculate-standings/deno.json"
+entrypoint = "./functions/calculate-standings/index.ts"
+
 # Edge Function Configuration

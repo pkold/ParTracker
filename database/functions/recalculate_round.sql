@@ -56,7 +56,7 @@ BEGIN
     ) as stableford_points
   FROM scores s
   JOIN round_players rp ON rp.round_id = s.round_id AND rp.player_id = s.player_id
-  JOIN course_tees ct ON ct.id = v_round.tee_id
+  JOIN course_tees ct ON ct.id = rp.tee_id
   CROSS JOIN LATERAL jsonb_array_elements(ct.holes) as hole_data
   WHERE s.round_id = p_round_id
     AND (hole_data->>'hole_no')::int = s.hole_no;

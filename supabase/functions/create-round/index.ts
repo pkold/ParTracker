@@ -101,7 +101,7 @@ serve(async (req) => {
 
     // Determine team mode
     const isTeamPlay = play_mode === 'team'
-    const teamMode = isTeamPlay ? 'team' : 'individual'
+    const teamMode = isTeamPlay ? 'teams' : 'individual'
 
     // Build the round insert object with all required NOT NULL columns
     const roundInsert = {

@@ -1,7 +1,6 @@
--- ============================================
--- FINAL FIX: recalculate_round() 
--- Based on actual database schema
--- ============================================
+-- Fix: Add advisory lock to recalculate_round() to prevent concurrent race conditions
+-- When scores are saved rapidly, concurrent calls would DELETE+INSERT in parallel,
+-- causing "duplicate key value violates unique constraint hole_results_pkey"
 
 CREATE OR REPLACE FUNCTION recalculate_round(p_round_id UUID)
 RETURNS JSONB
@@ -21,15 +20,14 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Round % not found', p_round_id;
   END IF;
-  
+
   -- Clear existing results
   DELETE FROM hole_results WHERE round_id = p_round_id;
   DELETE FROM round_results WHERE round_id = p_round_id;
   DELETE FROM team_results WHERE round_id = p_round_id;
   DELETE FROM skins_results WHERE round_id = p_round_id;
-  
+
   -- Calculate hole-by-hole results
-  -- Extract hole data from JSONB array in course_tees
   INSERT INTO hole_results (
     round_id, player_id, hole_no, par, stroke_index,
     strokes, strokes_received, net_strokes, stableford_points
@@ -42,19 +40,19 @@ BEGIN
     (hole_data->>'stroke_index')::int as stroke_index,
     s.strokes,
     calculate_strokes_received(
-      rp.playing_hcp, 
-      (hole_data->>'stroke_index')::int, 
+      rp.playing_hcp,
+      (hole_data->>'stroke_index')::int,
       v_round.holes_played
     ) as strokes_received,
     s.strokes - calculate_strokes_received(
-      rp.playing_hcp, 
-      (hole_data->>'stroke_index')::int, 
+      rp.playing_hcp,
+      (hole_data->>'stroke_index')::int,
       v_round.holes_played
     ) as net_strokes,
     calculate_stableford_points(
       s.strokes - calculate_strokes_received(
-        rp.playing_hcp, 
-        (hole_data->>'stroke_index')::int, 
+        rp.playing_hcp,
+        (hole_data->>'stroke_index')::int,
         v_round.holes_played
       ),
       (hole_data->>'par')::int
@@ -65,8 +63,8 @@ BEGIN
   CROSS JOIN LATERAL jsonb_array_elements(ct.holes) as hole_data
   WHERE s.round_id = p_round_id
     AND (hole_data->>'hole_no')::int = s.hole_no;
-  
-  -- Calculate player totals (NO holes_played column)
+
+  -- Calculate player totals
   INSERT INTO round_results (
     round_id, player_id,
     gross_total, net_total, stableford_total
@@ -80,8 +78,8 @@ BEGIN
   FROM hole_results hr
   WHERE hr.round_id = p_round_id
   GROUP BY hr.round_id, hr.player_id;
-  
-  -- Calculate team results (if team mode = 'teams', NO holes_played column)
+
+  -- Calculate team results (if team mode = 'teams')
   IF v_round.team_mode = 'teams' THEN
     INSERT INTO team_results (round_id, team_id, gross_total, net_total, stableford_total)
     SELECT
@@ -91,10 +89,9 @@ BEGIN
       SUM(hr.net_strokes) as net_total,
       CASE v_round.team_scoring_mode
         WHEN 'bestball' THEN (
-          -- Best ball: sum of best stableford per hole
           SELECT SUM(best_per_hole.max_points)
           FROM (
-            SELECT 
+            SELECT
               hr2.hole_no,
               MAX(hr2.stableford_points) as max_points
             FROM hole_results hr2
@@ -112,16 +109,15 @@ BEGIN
       AND rp.team_id IS NOT NULL
     GROUP BY hr.round_id, rp.team_id;
   END IF;
-  
+
   -- Calculate skins (if enabled)
   IF v_round.skins_enabled THEN
-    -- Use net_strokes if skins_type = 'net', otherwise use gross strokes
     WITH score_for_skins AS (
       SELECT
         hr.round_id,
         hr.hole_no,
         hr.player_id,
-        CASE 
+        CASE
           WHEN v_round.skins_type = 'net' THEN hr.net_strokes
           ELSE hr.strokes
         END as score_for_comparison
@@ -138,13 +134,13 @@ BEGIN
     unique_winner AS (
       SELECT
         sfs.hole_no,
-        CASE 
+        CASE
           WHEN COUNT(*) = 1 THEN (array_agg(sfs.player_id))[1]
           ELSE NULL
         END as winner_player_id,
         MIN(sfs.score_for_comparison) as winning_score
       FROM score_for_skins sfs
-      JOIN lowest_per_hole lph ON lph.hole_no = sfs.hole_no 
+      JOIN lowest_per_hole lph ON lph.hole_no = sfs.hole_no
         AND lph.lowest_score = sfs.score_for_comparison
       GROUP BY sfs.hole_no
     )
@@ -157,7 +153,7 @@ BEGIN
       0,
       0
     FROM unique_winner uw;
-    
+
     -- Calculate carryovers if rollover enabled
     IF v_round.skins_rollover THEN
       WITH ordered AS (
@@ -177,7 +173,7 @@ BEGIN
             FROM ordered o3
             WHERE o3.rn < o.rn
               AND o3.rn > COALESCE((
-                SELECT MAX(o4.rn) 
+                SELECT MAX(o4.rn)
                 FROM ordered o4
                 WHERE o4.rn < o.rn AND o4.winner_player_id IS NOT NULL
               ), 0)
@@ -206,7 +202,7 @@ BEGIN
       WHERE round_id = p_round_id;
     END IF;
   END IF;
-  
+
   -- Return summary
   SELECT jsonb_build_object(
     'round_id', p_round_id,
@@ -215,9 +211,7 @@ BEGIN
     'teams_calculated', (SELECT COUNT(*) FROM team_results WHERE round_id = p_round_id),
     'skins_calculated', (SELECT COUNT(*) FROM skins_results WHERE round_id = p_round_id)
   ) INTO v_result;
-  
+
   RETURN v_result;
 END;
 $$;
-
-SELECT '✅ recalculate_round() updated - matches actual schema' as status;

@@ -43,4 +43,9 @@ verify_jwt = false
 import_map = "./functions/calculate-standings/deno.json"
 entrypoint = "./functions/calculate-standings/index.ts"
 
+[functions.friend-operations]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/friend-operations/index.ts"
+
 # Edge Function Configuration

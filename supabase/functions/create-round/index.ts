@@ -39,6 +39,7 @@ serve(async (req) => {
       carryover_enabled,
       holes_to_play,    // 9 or 18
       start_hole,       // 1-18
+      visible_to_friends,
     } = await req.json()
 
     console.log('=== CREATE ROUND ===')
@@ -124,6 +125,7 @@ serve(async (req) => {
       skins_rollover: carryover_enabled || true,
       // Visibility
       visibility: 'private',
+      visible_to_friends: visible_to_friends || false,
     }
 
     console.log('Round insert data:', JSON.stringify(roundInsert))

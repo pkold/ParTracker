@@ -63,6 +63,7 @@ serve(async (req) => {
             .insert({
               display_name: player.guest_info.display_name,
               handicap_index: player.guest_info.handicap_index,
+              gender: player.guest_info.gender || null,
               user_id: user.id, // Link guest to creator
               // email and phone intentionally left NULL (guest identifier pattern)
             })
@@ -203,7 +204,7 @@ serve(async (req) => {
         // Look up the tee for this player's color and course
         const { data: tee, error: teeError } = await supabaseAdmin
           .from('course_tees')
-          .select('id, slope_rating, course_rating, par')
+          .select('id, slope_rating_male, slope_rating_female, course_rating_male, course_rating_female, par')
           .eq('course_id', course_id)
           .eq('tee_color', player.tee_color)
           .single()
@@ -213,10 +214,10 @@ serve(async (req) => {
           throw new Error(`Tee not found for color: ${player.tee_color}`)
         }
 
-        // Get the player's handicap index
+        // Get the player's handicap index and gender
         const { data: playerData, error: playerError } = await supabaseAdmin
           .from('players')
-          .select('handicap_index, user_id')
+          .select('handicap_index, gender, user_id')
           .eq('id', player.player_id)
           .single()
 
@@ -225,14 +226,23 @@ serve(async (req) => {
           throw new Error(`Failed to fetch player: ${player.player_id}`)
         }
 
+        // Pick slope/course rating based on player gender (fall back to male if null)
+        const isFemale = playerData?.gender === 'female'
+        const slopeRating = isFemale
+          ? (tee.slope_rating_female ?? tee.slope_rating_male ?? 113)
+          : (tee.slope_rating_male ?? tee.slope_rating_female ?? 113)
+        const courseRating = isFemale
+          ? (tee.course_rating_female ?? tee.course_rating_male ?? tee.par)
+          : (tee.course_rating_male ?? tee.course_rating_female ?? tee.par)
+
         // Calculate playing handicap using WHS formula
-        // Playing HCP = Handicap Index × (Slope Rating / 113)
+        // Course Handicap = Handicap Index × (Slope Rating / 113) + (Course Rating - Par)
         const handicapIndex = playerData?.handicap_index || 0
         const playingHcp = Math.round(
-          (Number(handicapIndex) * tee.slope_rating) / 113
+          (Number(handicapIndex) * slopeRating) / 113 + (Number(courseRating) - tee.par)
         )
 
-        console.log(`Player ${player.player_id}: HCP ${handicapIndex} → Playing HCP ${playingHcp} (slope: ${tee.slope_rating})`)
+        console.log(`Player ${player.player_id}: HCP ${handicapIndex} → Playing HCP ${playingHcp} (slope: ${slopeRating}, CR: ${courseRating}, par: ${tee.par}, gender: ${playerData?.gender || 'null'})`)
 
         return {
           round_id: round.id,

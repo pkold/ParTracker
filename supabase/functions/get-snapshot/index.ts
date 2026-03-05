@@ -62,7 +62,7 @@ if (!hasAccess) {
       .select(`
         *,
         course:courses(id, name),
-        tee:course_tees(id, tee_name, tee_color, par, slope_rating, course_rating, holes)
+        tee:course_tees(id, tee_name, tee_color, par, slope_rating_male, slope_rating_female, course_rating_male, course_rating_female, holes)
       `)
       .eq('id', round_id)
       .single()

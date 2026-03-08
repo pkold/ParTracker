@@ -47,19 +47,66 @@ serve(async (req) => {
       throw new Error('Player profile not found')
     }
 
-    // 2. Delete rounds created by user (cascades to scores, round_players, etc.)
+    // 2. Delete friendships (both directions)
+    await supabaseAdmin
+      .from('friendships')
+      .delete()
+      .or(`user_id.eq.${user.id},friend_id.eq.${user.id}`)
+
+    // 3. Delete friend invite codes
+    await supabaseAdmin
+      .from('friend_invite_codes')
+      .delete()
+      .eq('user_id', user.id)
+
+    // 4. Delete home courses
+    await supabaseAdmin
+      .from('home_courses')
+      .delete()
+      .eq('user_id', user.id)
+
+    // 5. Delete user hidden items
+    await supabaseAdmin
+      .from('user_hidden_items')
+      .delete()
+      .eq('user_id', user.id)
+
+    // 6. Delete scores by this player (in all rounds)
+    await supabaseAdmin
+      .from('scores')
+      .delete()
+      .eq('player_id', player.id)
+
+    // 7. Remove player from tournament standings and tournament players
+    await supabaseAdmin
+      .from('tournament_standings')
+      .delete()
+      .eq('player_id', player.id)
+
+    await supabaseAdmin
+      .from('tournament_players')
+      .delete()
+      .eq('player_id', player.id)
+
+    // 8. Remove player from other users' rounds (remove round_player entries)
+    await supabaseAdmin
+      .from('round_players')
+      .delete()
+      .eq('player_id', player.id)
+
+    // 9. Delete rounds created by user (cascades to remaining scores, round_players, etc.)
     await supabaseAdmin
       .from('rounds')
       .delete()
       .eq('created_by', user.id)
 
-    // 3. Delete user consents
+    // 8. Delete user consents
     await supabaseAdmin
       .from('user_consents')
       .delete()
       .eq('user_id', user.id)
 
-    // 4. Delete profile photos from storage
+    // 9. Delete profile photos from storage
     const { data: files } = await supabaseAdmin.storage
       .from('profile-photos')
       .list(user.id)
@@ -71,7 +118,7 @@ serve(async (req) => {
         .remove(filePaths)
     }
 
-    // 5. Anonymize player record (keep for historical round data integrity)
+    // 10. Anonymize player record (keep for historical round data integrity)
     await supabaseAdmin
       .from('players')
       .update({
@@ -86,7 +133,7 @@ serve(async (req) => {
       })
       .eq('id', player.id)
 
-    // 6. Delete auth user
+    // 11. Delete auth user
     const { error: deleteAuthError } = await supabaseAdmin.auth.admin.deleteUser(user.id)
     if (deleteAuthError) {
       throw deleteAuthError

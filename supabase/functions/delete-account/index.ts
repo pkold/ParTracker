@@ -35,91 +35,111 @@ serve(async (req) => {
       throw new Error('Not authenticated')
     }
 
+    const log: string[] = []
+
     // 1. Get player record
-    const { data: player } = await supabaseAdmin
+    const { data: player, error: playerErr } = await supabaseAdmin
       .from('players')
       .select('id')
       .eq('user_id', user.id)
       .not('email', 'is', null)
       .single()
 
-    if (!player) {
-      throw new Error('Player profile not found')
+    if (playerErr || !player) {
+      throw new Error(`Player profile not found: ${playerErr?.message ?? 'no rows'}`)
+    }
+    log.push(`player=${player.id}`)
+
+    // Helper: delete from table and log result
+    async function deleteFrom(table: string, column: string, value: string) {
+      const { error } = await supabaseAdmin
+        .from(table)
+        .delete()
+        .eq(column, value)
+      if (error) {
+        log.push(`WARN ${table}: ${error.message}`)
+      } else {
+        log.push(`OK ${table}`)
+      }
+    }
+
+    async function deleteFromOr(table: string, filter: string) {
+      const { error } = await supabaseAdmin
+        .from(table)
+        .delete()
+        .or(filter)
+      if (error) {
+        log.push(`WARN ${table}: ${error.message}`)
+      } else {
+        log.push(`OK ${table}`)
+      }
     }
 
     // 2. Delete friendships (both directions)
-    await supabaseAdmin
-      .from('friendships')
-      .delete()
-      .or(`user_id.eq.${user.id},friend_id.eq.${user.id}`)
+    await deleteFromOr('friendships', `user_id.eq.${user.id},friend_id.eq.${user.id}`)
 
     // 3. Delete friend invite codes
-    await supabaseAdmin
-      .from('friend_invite_codes')
-      .delete()
-      .eq('user_id', user.id)
+    await deleteFrom('friend_invite_codes', 'user_id', user.id)
 
     // 4. Delete home courses
-    await supabaseAdmin
-      .from('home_courses')
-      .delete()
-      .eq('user_id', user.id)
+    await deleteFrom('home_courses', 'user_id', user.id)
 
     // 5. Delete user hidden items
-    await supabaseAdmin
-      .from('user_hidden_items')
-      .delete()
-      .eq('user_id', user.id)
+    await deleteFrom('user_hidden_items', 'user_id', user.id)
 
-    // 6. Delete scores by this player (in all rounds)
-    await supabaseAdmin
-      .from('scores')
-      .delete()
-      .eq('player_id', player.id)
+    // 6. Delete hole_results by this player (before scores, since hole_results may reference scores)
+    await deleteFrom('hole_results', 'player_id', player.id)
 
-    // 7. Remove player from tournament standings and tournament players
-    await supabaseAdmin
-      .from('tournament_standings')
-      .delete()
-      .eq('player_id', player.id)
+    // 7. Delete round_results by this player
+    await deleteFrom('round_results', 'player_id', player.id)
 
-    await supabaseAdmin
-      .from('tournament_players')
-      .delete()
-      .eq('player_id', player.id)
+    // 8. Delete skins_results by this player
+    await deleteFrom('skins_results', 'player_id', player.id)
 
-    // 8. Remove player from other users' rounds (remove round_player entries)
-    await supabaseAdmin
-      .from('round_players')
-      .delete()
-      .eq('player_id', player.id)
+    // 9. Delete scores by this player
+    await deleteFrom('scores', 'player_id', player.id)
 
-    // 9. Delete rounds created by user (cascades to remaining scores, round_players, etc.)
-    await supabaseAdmin
-      .from('rounds')
-      .delete()
-      .eq('created_by', user.id)
+    // 10. Remove player from tournament standings and tournament players
+    await deleteFrom('tournament_standings', 'player_id', player.id)
+    await deleteFrom('tournament_players', 'player_id', player.id)
 
-    // 8. Delete user consents
-    await supabaseAdmin
-      .from('user_consents')
-      .delete()
-      .eq('user_id', user.id)
+    // 11. Remove player from round_players
+    await deleteFrom('round_players', 'player_id', player.id)
 
-    // 9. Delete profile photos from storage
+    // 12. Delete rounds created by this user (cascades remaining child rows)
+    await deleteFrom('rounds', 'created_by', user.id)
+
+    // 13. Delete tournaments created by this user
+    await deleteFrom('tournaments', 'created_by', user.id)
+
+    // 14. Delete user consents
+    await deleteFrom('user_consents', 'user_id', user.id)
+
+    // 15. Delete contact messages
+    const { error: contactErr } = await supabaseAdmin
+      .from('contact_messages')
+      .delete()
+      .eq('email', user.email ?? '')
+    if (contactErr) log.push(`WARN contact_messages: ${contactErr.message}`)
+    else log.push('OK contact_messages')
+
+    // 16. Delete profile photos from storage
     const { data: files } = await supabaseAdmin.storage
       .from('profile-photos')
       .list(user.id)
 
     if (files && files.length > 0) {
-      const filePaths = files.map((f) => `${user.id}/${f.name}`)
+      const filePaths = files.map((f: any) => `${user.id}/${f.name}`)
       await supabaseAdmin.storage
         .from('profile-photos')
         .remove(filePaths)
+      log.push(`OK storage (${files.length} files)`)
+    } else {
+      log.push('OK storage (no files)')
     }
 
-    // 10. Anonymize player record (keep for historical round data integrity)
-    await supabaseAdmin
+    // 17. Anonymize player record (keep for historical round data integrity)
+    const { error: updateErr } = await supabaseAdmin
       .from('players')
       .update({
         display_name: 'Deleted User',
@@ -130,17 +150,22 @@ serve(async (req) => {
         last_name: null,
         settings: {},
         handicap_index: null,
+        user_id: null,
       })
       .eq('id', player.id)
+    if (updateErr) log.push(`WARN anonymize: ${updateErr.message}`)
+    else log.push('OK anonymize')
 
-    // 11. Delete auth user
+    // 18. Delete auth user
     const { error: deleteAuthError } = await supabaseAdmin.auth.admin.deleteUser(user.id)
     if (deleteAuthError) {
-      throw deleteAuthError
+      log.push(`FAIL auth: ${deleteAuthError.message}`)
+      throw new Error(`Failed to delete auth user: ${deleteAuthError.message}. Log: ${log.join(', ')}`)
     }
+    log.push('OK auth')
 
     return new Response(
-      JSON.stringify({ success: true }),
+      JSON.stringify({ success: true, log }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200,

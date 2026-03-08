@@ -48,4 +48,9 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/friend-operations/index.ts"
 
+[functions.delete-account]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/delete-account/index.ts"
+
 # Edge Function Configuration

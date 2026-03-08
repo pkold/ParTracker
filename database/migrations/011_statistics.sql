@@ -139,11 +139,11 @@ AS $$
     LIMIT p_limit
   )
   SELECT
-    COUNT(*) FILTER (WHERE hr.net_strokes <= hr.par - 2)::INT AS eagles_or_better,
-    COUNT(*) FILTER (WHERE hr.net_strokes = hr.par - 1)::INT AS birdies,
-    COUNT(*) FILTER (WHERE hr.net_strokes = hr.par)::INT AS pars,
-    COUNT(*) FILTER (WHERE hr.net_strokes = hr.par + 1)::INT AS bogeys,
-    COUNT(*) FILTER (WHERE hr.net_strokes >= hr.par + 2)::INT AS double_bogeys_plus
+    COUNT(*) FILTER (WHERE hr.strokes <= hr.par - 2)::INT AS eagles_or_better,
+    COUNT(*) FILTER (WHERE hr.strokes = hr.par - 1)::INT AS birdies,
+    COUNT(*) FILTER (WHERE hr.strokes = hr.par)::INT AS pars,
+    COUNT(*) FILTER (WHERE hr.strokes = hr.par + 1)::INT AS bogeys,
+    COUNT(*) FILTER (WHERE hr.strokes >= hr.par + 2)::INT AS double_bogeys_plus
   FROM public.hole_results hr
   JOIN filtered_rounds fr ON fr.round_id = hr.round_id
   WHERE hr.player_id = p_player_id;

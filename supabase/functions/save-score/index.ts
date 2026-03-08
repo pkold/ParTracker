@@ -47,8 +47,8 @@ serve(async (req) => {
       client_event_id, // For offline sync idempotency
     } = body
 
-    // Validation
-    if (!round_id || !player_id || !hole_no || !strokes) {
+    // Validation (strokes can be 0 for pick-up, hole_no can be any positive int)
+    if (!round_id || !player_id || !hole_no || strokes == null) {
       throw new Error('Missing required fields: round_id, player_id, hole_no, strokes')
     }
 

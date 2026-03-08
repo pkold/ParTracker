@@ -76,7 +76,7 @@ serve(async (req) => {
     }
 
     // 2. Delete friendships (both directions)
-    await deleteFromOr('friendships', `user_id.eq.${user.id},friend_id.eq.${user.id}`)
+    await deleteFromOr('friendships', `requester_id.eq.${user.id},addressee_id.eq.${user.id}`)
 
     // 3. Delete friend invite codes
     await deleteFrom('friend_invite_codes', 'user_id', user.id)
@@ -87,30 +87,20 @@ serve(async (req) => {
     // 5. Delete user hidden items
     await deleteFrom('user_hidden_items', 'user_id', user.id)
 
-    // 6. Delete hole_results by this player (before scores, since hole_results may reference scores)
-    await deleteFrom('hole_results', 'player_id', player.id)
+    // 6. Delete rounds created by this user (cascades scores, round_players,
+    //    hole_results, round_results, skins_results for those rounds)
+    await deleteFrom('rounds', 'created_by', user.id)
 
-    // 7. Delete round_results by this player
-    await deleteFrom('round_results', 'player_id', player.id)
+    // 7. Delete tournaments created by this user
+    await deleteFrom('tournaments', 'created_by', user.id)
 
-    // 8. Delete skins_results by this player
-    await deleteFrom('skins_results', 'player_id', player.id)
-
-    // 9. Delete scores by this player
-    await deleteFrom('scores', 'player_id', player.id)
-
-    // 10. Remove player from tournament standings and tournament players
+    // 8. Remove from tournament standings/players (not tied to specific rounds)
     await deleteFrom('tournament_standings', 'player_id', player.id)
     await deleteFrom('tournament_players', 'player_id', player.id)
 
-    // 11. Remove player from round_players
-    await deleteFrom('round_players', 'player_id', player.id)
-
-    // 12. Delete rounds created by this user (cascades remaining child rows)
-    await deleteFrom('rounds', 'created_by', user.id)
-
-    // 13. Delete tournaments created by this user
-    await deleteFrom('tournaments', 'created_by', user.id)
+    // NOTE: scores, hole_results, round_results, skins_results, and round_players
+    // for rounds created by OTHER users are intentionally preserved.
+    // The player record is anonymized below so they show as "Deleted User".
 
     // 14. Delete user consents
     await deleteFrom('user_consents', 'user_id', user.id)

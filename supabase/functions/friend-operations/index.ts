@@ -288,7 +288,7 @@ async function listFriends(
   // Fetch player info for friends
   const { data: players, error: playersError } = await supabaseAdmin
     .from('players')
-    .select('id, user_id, display_name, email, handicap_index')
+    .select('id, user_id, display_name, email, phone, handicap_index')
     .in('user_id', friendUserIds)
     .not('email', 'is', null)
 
@@ -305,6 +305,7 @@ async function listFriends(
       player_id: player?.id ?? null,
       display_name: player?.display_name ?? null,
       email: player?.email ?? null,
+      phone: player?.phone ?? null,
       handicap_index: player?.handicap_index ?? null,
     }
   })

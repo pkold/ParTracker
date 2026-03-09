@@ -33,13 +33,14 @@ serve(async (req) => {
       course_id,
       created_by,
       game_types,       // Array of strings like ['skins', 'stableford']
-      players,          // Array of { player_id, tee_color, guest_info }
+      players,          // Array of { player_id, tee_id, guest_info }
       teams,            // { team1: [playerIds], team2: [playerIds] } or null
       play_mode,        // 'individual' or 'team'
       carryover_enabled,
       holes_to_play,    // 9 or 18
       start_hole,       // 1-18
       visible_to_friends,
+      scheduled_at,
     } = await req.json()
 
     console.log('=== CREATE ROUND ===')
@@ -79,14 +80,14 @@ serve(async (req) => {
 
           return {
             player_id: newGuest.id,
-            tee_color: player.tee_color,
+            tee_id: player.tee_id,
           }
         }
 
         // Existing player — pass through
         return {
           player_id: player.player_id,
-          tee_color: player.tee_color,
+          tee_id: player.tee_id,
         }
       })
     )
@@ -106,10 +107,12 @@ serve(async (req) => {
     const teamMode = isTeamPlay ? 'teams' : 'individual'
 
     // Build the round insert object with all required NOT NULL columns
+    const isScheduled = !!scheduled_at
     const roundInsert = {
       course_id,
       created_by,
-      status: 'active',
+      status: isScheduled ? 'scheduled' : 'active',
+      scheduled_at: scheduled_at || null,
       holes_played: holes_to_play || 18,
       start_hole: start_hole || 1,
       // Scoring configuration
@@ -201,17 +204,16 @@ serve(async (req) => {
 
     const roundPlayersData = await Promise.all(
       processedPlayers.map(async (player: any) => {
-        // Look up the tee for this player's color and course
+        // Look up the tee by id
         const { data: tee, error: teeError } = await supabaseAdmin
           .from('course_tees')
           .select('id, slope_rating_male, slope_rating_female, course_rating_male, course_rating_female, par')
-          .eq('course_id', course_id)
-          .eq('tee_color', player.tee_color)
+          .eq('id', player.tee_id)
           .single()
 
         if (teeError || !tee) {
-          console.error('Error finding tee:', teeError, 'Color:', player.tee_color)
-          throw new Error(`Tee not found for color: ${player.tee_color}`)
+          console.error('Error finding tee:', teeError, 'ID:', player.tee_id)
+          throw new Error(`Tee not found for id: ${player.tee_id}`)
         }
 
         // Get the player's handicap index and gender

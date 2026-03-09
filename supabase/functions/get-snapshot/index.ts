@@ -15,7 +15,7 @@ serve(async (req) => {
     // Create Supabase admin client (bypasses RLS)
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SERVICE_ROLE_KEY') ?? ''
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
     // Create user client for auth verification
@@ -46,23 +46,43 @@ serve(async (req) => {
       throw new Error('Missing required parameter: round_id')
     }
 
-    // Verify user has access to this round
-const { data: hasAccess } = await supabaseAdmin.rpc('is_round_member', {
-  p_round_id: round_id,
-  p_user_id: user.id,
-})
+    // Verify user has access to this round (member or friend spectating)
+    const { data: hasAccess } = await supabaseAdmin.rpc('is_round_member', {
+      p_round_id: round_id,
+      p_user_id: user.id,
+    })
 
-if (!hasAccess) {
-  throw new Error('Not authorized to view this round')
-}
+    if (!hasAccess) {
+      // Check if round is visible to friends and user is a friend of the creator
+      const { data: round_check } = await supabaseAdmin
+        .from('rounds')
+        .select('created_by, visible_to_friends')
+        .eq('id', round_id)
+        .single()
+
+      if (!round_check?.visible_to_friends) {
+        throw new Error('Not authorized to view this round')
+      }
+
+      const { data: friendship } = await supabaseAdmin
+        .from('friendships')
+        .select('id')
+        .eq('status', 'accepted')
+        .or(`and(requester_id.eq.${user.id},addressee_id.eq.${round_check.created_by}),and(requester_id.eq.${round_check.created_by},addressee_id.eq.${user.id})`)
+        .limit(1)
+        .single()
+
+      if (!friendship) {
+        throw new Error('Not authorized to view this round')
+      }
+    }
 
     // Get round details
     const { data: round, error: roundError } = await supabaseAdmin
       .from('rounds')
       .select(`
         *,
-        course:courses(id, name),
-        tee:course_tees(id, tee_name, tee_color, par, slope_rating_male, slope_rating_female, course_rating_male, course_rating_female, holes)
+        course:courses(id, name)
       `)
       .eq('id', round_id)
       .single()

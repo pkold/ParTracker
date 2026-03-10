@@ -52,13 +52,42 @@ serve(async (req) => {
     console.log('Scoring mode:', scoring_mode)
 
     // -------------------------------------------------------
-    // STEP 1: Auto-generate points_table if not provided
+    // STEP 1: Create guest players if needed
+    // -------------------------------------------------------
+    const processedPlayers = await Promise.all(
+      players.map(async (p: any) => {
+        if (!p.player_id && p.guest_info) {
+          const { data: newGuest, error: guestError } = await supabaseAdmin
+            .from('players')
+            .insert({
+              display_name: p.guest_info.display_name,
+              handicap_index: p.guest_info.handicap_index,
+              gender: p.guest_info.gender || null,
+              user_id: user.id,
+            })
+            .select()
+            .single()
+
+          if (guestError) {
+            console.error('Error creating guest player:', guestError)
+            throw new Error(`Failed to create guest: ${p.guest_info.display_name}`)
+          }
+
+          console.log('Created guest player:', newGuest.id, newGuest.display_name)
+          return { ...p, player_id: newGuest.id }
+        }
+        return p
+      })
+    )
+
+    // -------------------------------------------------------
+    // STEP 2: Auto-generate points_table if not provided
     // -------------------------------------------------------
     let finalPointsTable = points_table
-    if (!finalPointsTable && players?.length > 0) {
+    if (!finalPointsTable && processedPlayers?.length > 0) {
       const table: { rank: number; points: number }[] = []
       let pts = 100
-      for (let i = 1; i <= players.length; i++) {
+      for (let i = 1; i <= processedPlayers.length; i++) {
         table.push({ rank: i, points: Math.max(Math.round(pts), 5) })
         pts = pts * 0.7
       }
@@ -103,8 +132,8 @@ serve(async (req) => {
     // -------------------------------------------------------
     // STEP 3: Insert tournament_players
     // -------------------------------------------------------
-    if (players && players.length > 0) {
-      const playersInsert = players.map((p: any) => ({
+    if (processedPlayers && processedPlayers.length > 0) {
+      const playersInsert = processedPlayers.map((p: any) => ({
         tournament_id: tournament.id,
         player_id: p.player_id,
         team_name: p.team_name || null,
@@ -119,12 +148,12 @@ serve(async (req) => {
         throw new Error(`Failed to add players: ${playersError.message}`)
       }
 
-      console.log('Tournament players added:', players.length)
+      console.log('Tournament players added:', processedPlayers.length)
 
       // -------------------------------------------------------
-      // STEP 4: Initialize tournament_standings (all zeros)
+      // STEP 5: Initialize tournament_standings (all zeros)
       // -------------------------------------------------------
-      const standingsInsert = players.map((p: any) => ({
+      const standingsInsert = processedPlayers.map((p: any) => ({
         tournament_id: tournament.id,
         player_id: p.player_id,
         rounds_played: 0,
@@ -149,9 +178,9 @@ serve(async (req) => {
       console.log('Tournament standings initialized')
 
       // -------------------------------------------------------
-      // STEP 5: Initialize tournament_team_standings (if teams)
+      // STEP 6: Initialize tournament_team_standings (if teams)
       // -------------------------------------------------------
-      const teamNames = [...new Set(players.filter((p: any) => p.team_name).map((p: any) => p.team_name))]
+      const teamNames = [...new Set(processedPlayers.filter((p: any) => p.team_name).map((p: any) => p.team_name))]
 
       if (teamNames.length > 0) {
         const teamStandingsInsert = teamNames.map((teamName: string) => ({

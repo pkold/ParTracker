@@ -1,5 +1,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createLogger } from '../_shared/log.ts'
+
+const log = createLogger('create-tournament')
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -45,11 +48,10 @@ serve(async (req) => {
       players, // Array of { player_id, team_name? }
     } = await req.json()
 
-    console.log('=== CREATE TOURNAMENT ===')
-    console.log('Name:', name)
-    console.log('Created by:', user.id)
-    console.log('Players:', JSON.stringify(players))
-    console.log('Scoring mode:', scoring_mode)
+    log.info('=== CREATE TOURNAMENT ===')
+    log.info('Name:', name, 'Players:', players.length, 'Mode:', scoring_mode)
+    log.debug('Created by:', user.id)
+    log.debug('Players:', JSON.stringify(players))
 
     // -------------------------------------------------------
     // STEP 1: Create guest players if needed
@@ -69,11 +71,11 @@ serve(async (req) => {
             .single()
 
           if (guestError) {
-            console.error('Error creating guest player:', guestError)
+            log.error('Error creating guest player:', guestError)
             throw new Error(`Failed to create guest: ${p.guest_info.display_name}`)
           }
 
-          console.log('Created guest player:', newGuest.id, newGuest.display_name)
+          log.debug('Created guest player:', newGuest.id, newGuest.display_name)
           return { ...p, player_id: newGuest.id }
         }
         return p
@@ -114,7 +116,7 @@ serve(async (req) => {
       status: 'active',
     }
 
-    console.log('Tournament insert:', JSON.stringify(tournamentInsert))
+    log.debug('Tournament insert:', JSON.stringify(tournamentInsert))
 
     const { data: tournament, error: tournamentError } = await supabaseAdmin
       .from('tournaments')
@@ -123,11 +125,11 @@ serve(async (req) => {
       .single()
 
     if (tournamentError) {
-      console.error('Error creating tournament:', tournamentError)
+      log.error('Error creating tournament:', tournamentError)
       throw new Error(`Failed to create tournament: ${tournamentError.message}`)
     }
 
-    console.log('Tournament created:', tournament.id)
+    log.info('Tournament created:', tournament.id)
 
     // -------------------------------------------------------
     // STEP 3: Insert tournament_players
@@ -144,11 +146,11 @@ serve(async (req) => {
         .insert(playersInsert)
 
       if (playersError) {
-        console.error('Error inserting tournament_players:', playersError)
+        log.error('Error inserting tournament_players:', playersError)
         throw new Error(`Failed to add players: ${playersError.message}`)
       }
 
-      console.log('Tournament players added:', processedPlayers.length)
+      log.info('Tournament players added:', processedPlayers.length)
 
       // -------------------------------------------------------
       // STEP 5: Initialize tournament_standings (all zeros)
@@ -171,11 +173,11 @@ serve(async (req) => {
         .insert(standingsInsert)
 
       if (standingsError) {
-        console.error('Error initializing standings:', standingsError)
+        log.error('Error initializing standings:', standingsError)
         throw new Error(`Failed to initialize standings: ${standingsError.message}`)
       }
 
-      console.log('Tournament standings initialized')
+      log.debug('Tournament standings initialized')
 
       // -------------------------------------------------------
       // STEP 6: Initialize tournament_team_standings (if teams)
@@ -198,15 +200,15 @@ serve(async (req) => {
           .insert(teamStandingsInsert)
 
         if (teamStandingsError) {
-          console.error('Error initializing team standings:', teamStandingsError)
+          log.error('Error initializing team standings:', teamStandingsError)
           throw new Error(`Failed to initialize team standings: ${teamStandingsError.message}`)
         }
 
-        console.log('Team standings initialized for:', teamNames)
+        log.debug('Team standings initialized for:', teamNames)
       }
     }
 
-    console.log('=== TOURNAMENT CREATED SUCCESSFULLY ===')
+    log.info('=== TOURNAMENT CREATED SUCCESSFULLY ===')
 
     return new Response(
       JSON.stringify({
@@ -219,7 +221,7 @@ serve(async (req) => {
       }
     )
   } catch (error) {
-    console.error('=== CREATE TOURNAMENT ERROR ===', error)
+    log.error('=== CREATE TOURNAMENT ERROR ===', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       {

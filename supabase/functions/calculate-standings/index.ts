@@ -1,5 +1,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createLogger } from '../_shared/log.ts'
+
+const log = createLogger('calculate-standings')
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -26,8 +29,8 @@ serve(async (req) => {
     const { round_id } = await req.json()
     if (!round_id) throw new Error('round_id is required')
 
-    console.log('=== CALCULATE STANDINGS ===')
-    console.log('Round ID:', round_id)
+    log.info('=== CALCULATE STANDINGS ===')
+    log.info('Round ID:', round_id)
 
     // -------------------------------------------------------
     // STEP 1: Find tournament for this round
@@ -43,7 +46,7 @@ serve(async (req) => {
     }
 
     const tournamentId = tournamentRound.tournament_id
-    console.log('Tournament ID:', tournamentId)
+    log.info('Tournament ID:', tournamentId)
 
     // -------------------------------------------------------
     // STEP 2: Get tournament config
@@ -61,7 +64,7 @@ serve(async (req) => {
     const aggregationRule = tournament.aggregation_rule
     const bestN = tournament.best_n
 
-    console.log('Aggregation:', aggregationRule, 'Best N:', bestN)
+    log.debug('Aggregation:', aggregationRule, 'Best N:', bestN)
 
     // -------------------------------------------------------
     // STEP 3: Get all completed rounds for this tournament
@@ -86,7 +89,7 @@ serve(async (req) => {
     if (crError) throw new Error('Failed to check round statuses')
 
     const completedRoundIds = completedRounds?.map((r: any) => r.id) || []
-    console.log('Completed rounds:', completedRoundIds.length, 'of', roundIds.length)
+    log.info('Completed rounds:', completedRoundIds.length, 'of', roundIds.length)
 
     if (completedRoundIds.length === 0) {
       return new Response(
@@ -368,11 +371,11 @@ serve(async (req) => {
         }, { onConflict: 'tournament_id,player_id' })
 
       if (upsertError) {
-        console.error('Error upserting standing for', s.player_id, upsertError)
+        log.error('Error upserting standing for', s.player_id, upsertError)
       }
     }
 
-    console.log('Standings updated for', standings.length, 'players')
+    log.info('Standings updated for', standings.length, 'players')
 
     // -------------------------------------------------------
     // STEP 10: Update team standings (if teams exist)
@@ -416,14 +419,14 @@ serve(async (req) => {
           }, { onConflict: 'tournament_id,team_name' })
 
         if (teamUpsertError) {
-          console.error('Error upserting team standing:', teamUpsertError)
+          log.error('Error upserting team standing:', teamUpsertError)
         }
       }
 
-      console.log('Team standings updated for', teamNames.length, 'teams')
+      log.info('Team standings updated for', teamNames.length, 'teams')
     }
 
-    console.log('=== STANDINGS CALCULATED SUCCESSFULLY ===')
+    log.info('=== STANDINGS CALCULATED SUCCESSFULLY ===')
 
     return new Response(
       JSON.stringify({
@@ -443,7 +446,7 @@ serve(async (req) => {
       }
     )
   } catch (error) {
-    console.error('=== CALCULATE STANDINGS ERROR ===', error)
+    log.error('=== CALCULATE STANDINGS ERROR ===', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       {

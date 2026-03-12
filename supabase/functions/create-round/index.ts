@@ -1,5 +1,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createLogger } from '../_shared/log.ts'
+
+const log = createLogger('create-round')
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -42,13 +45,12 @@ serve(async (req) => {
       scheduled_at,
     } = await req.json()
 
-    console.log('=== CREATE ROUND ===')
-    console.log('Course:', course_id)
-    console.log('Created by:', user.id)
-    console.log('Players:', JSON.stringify(players))
-    console.log('Game types:', JSON.stringify(game_types))
-    console.log('Play mode:', play_mode)
-    console.log('Holes:', holes_to_play, 'Start:', start_hole)
+    log.info('=== CREATE ROUND ===')
+    log.info('Course:', course_id, 'Players:', players.length, 'Mode:', play_mode)
+    log.debug('Created by:', user.id)
+    log.debug('Players:', JSON.stringify(players))
+    log.debug('Game types:', JSON.stringify(game_types))
+    log.debug('Holes:', holes_to_play, 'Start:', start_hole)
 
     // -------------------------------------------------------
     // STEP 1: Process players — create guest players if needed
@@ -71,11 +73,11 @@ serve(async (req) => {
             .single()
 
           if (guestError) {
-            console.error('Error creating guest player:', guestError)
+            log.error('Error creating guest player:', guestError)
             throw new Error(`Failed to create guest: ${player.guest_info.display_name}`)
           }
 
-          console.log('Created guest player:', newGuest.id, newGuest.display_name)
+          log.debug('Created guest player:', newGuest.id, newGuest.display_name)
 
           return {
             player_id: newGuest.id,
@@ -131,7 +133,7 @@ serve(async (req) => {
       visible_to_friends: visible_to_friends || false,
     }
 
-    console.log('Round insert data:', JSON.stringify(roundInsert))
+    log.debug('Round insert data:', JSON.stringify(roundInsert))
 
     // -------------------------------------------------------
     // STEP 3: Create the round
@@ -143,11 +145,11 @@ serve(async (req) => {
       .single()
 
     if (roundError) {
-      console.error('Error creating round:', roundError)
+      log.error('Error creating round:', roundError)
       throw new Error(`Failed to create round: ${roundError.message}`)
     }
 
-    console.log('Round created:', round.id)
+    log.info('Round created:', round.id)
 
     // -------------------------------------------------------
     // STEP 4: Create teams (if team play)
@@ -166,12 +168,12 @@ serve(async (req) => {
         .select()
 
       if (teamsError) {
-        console.error('Error creating teams:', teamsError)
+        log.error('Error creating teams:', teamsError)
         throw new Error(`Failed to create teams: ${teamsError.message}`)
       }
 
       createdTeams = teamData || []
-      console.log('Teams created:', createdTeams.map(t => t.id))
+      log.debug('Teams created:', createdTeams.map(t => t.id))
     }
 
     // -------------------------------------------------------
@@ -211,7 +213,7 @@ serve(async (req) => {
           .single()
 
         if (teeError || !tee) {
-          console.error('Error finding tee:', teeError, 'ID:', player.tee_id)
+          log.error('Error finding tee:', teeError, 'ID:', player.tee_id)
           throw new Error(`Tee not found for id: ${player.tee_id}`)
         }
 
@@ -223,7 +225,7 @@ serve(async (req) => {
           .single()
 
         if (playerError) {
-          console.error('Error fetching player:', playerError)
+          log.error('Error fetching player:', playerError)
           throw new Error(`Failed to fetch player: ${player.player_id}`)
         }
 
@@ -243,7 +245,7 @@ serve(async (req) => {
           (Number(handicapIndex) * slopeRating) / 113 + (Number(courseRating) - tee.par)
         )
 
-        console.log(`Player ${player.player_id}: HCP ${handicapIndex} → Playing HCP ${playingHcp} (slope: ${slopeRating}, CR: ${courseRating}, par: ${tee.par}, gender: ${playerData?.gender || 'null'})`)
+        log.debug(`Player ${player.player_id}: HCP ${handicapIndex} → Playing HCP ${playingHcp} (slope: ${slopeRating}, CR: ${courseRating}, par: ${tee.par}, gender: ${playerData?.gender || 'null'})`)
 
         return {
           round_id: round.id,
@@ -257,20 +259,18 @@ serve(async (req) => {
       })
     )
 
-    console.log('Inserting round_players:', JSON.stringify(roundPlayersData))
+    log.debug('Inserting round_players:', JSON.stringify(roundPlayersData))
 
     const { error: playersInsertError } = await supabaseAdmin
       .from('round_players')
       .insert(roundPlayersData)
 
     if (playersInsertError) {
-      console.error('Error inserting round_players:', playersInsertError)
+      log.error('Error inserting round_players:', playersInsertError)
       throw new Error(`Failed to add players: ${playersInsertError.message}`)
     }
 
-    console.log('=== ROUND CREATED SUCCESSFULLY ===')
-    console.log('Round ID:', round.id)
-    console.log('Players:', roundPlayersData.length)
+    log.info('Round created successfully:', round.id, 'with', roundPlayersData.length, 'players')
 
     // Return success response
     return new Response(
@@ -289,7 +289,7 @@ serve(async (req) => {
       }
     )
   } catch (error) {
-    console.error('=== CREATE ROUND ERROR ===', error)
+    log.error('=== CREATE ROUND ERROR ===', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       {

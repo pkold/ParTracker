@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { createLogger } from '../_shared/log.ts'
+import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
 
 const log = createLogger('create-tournament')
 
@@ -30,6 +31,10 @@ serve(async (req) => {
     if (userError || !user) {
       throw new Error('Unauthorized')
     }
+
+    // Rate limit: 10 requests per minute per user
+    const rl = checkRateLimit(user.id, { maxRequests: 10 })
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
     // Parse the request body
     const {

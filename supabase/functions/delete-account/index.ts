@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -34,6 +35,10 @@ serve(async (req) => {
     if (!user) {
       throw new Error('Not authenticated')
     }
+
+    // Rate limit: 5 requests per minute per user (sensitive operation)
+    const rl = checkRateLimit(user.id, { maxRequests: 5 })
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
     const log: string[] = []
 

@@ -2,6 +2,10 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { createLogger } from '../_shared/log.ts'
 import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
+import {
+  ValidationError, requireUUID, requireArray, requireEnum,
+  optionalBoolean, optionalISO, requireInt, validateRoundPlayer,
+} from '../_shared/validate.ts'
 
 const log = createLogger('create-round')
 
@@ -36,24 +40,25 @@ serve(async (req) => {
     const rl = checkRateLimit(user.id, { maxRequests: 10 })
     if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
-    // Parse the request body
-    const {
-      course_id,
-      game_types,       // Array of strings like ['skins', 'stableford']
-      players,          // Array of { player_id, tee_id, guest_info }
-      teams,            // { team1: [playerIds], team2: [playerIds] } or null
-      play_mode,        // 'individual' or 'team'
-      carryover_enabled,
-      holes_to_play,    // 9 or 18
-      start_hole,       // 1-18
-      visible_to_friends,
-      scheduled_at,
-    } = await req.json()
+    // Parse and validate the request body
+    const body = await req.json()
+
+    const course_id = requireUUID(body.course_id, 'course_id')
+    const players = requireArray(body.players, 'players', 1, 100)
+    const validatedPlayers = players.map((p, i) => validateRoundPlayer(p, i))
+    const game_types = body.game_types != null ? requireArray(body.game_types, 'game_types', 0, 10) : []
+    const play_mode = requireEnum(body.play_mode ?? 'individual', 'play_mode', ['individual', 'team'])
+    const carryover_enabled = optionalBoolean(body.carryover_enabled, 'carryover_enabled')
+    const holes_to_play = requireInt(body.holes_to_play ?? 18, 'holes_to_play', 1, 18)
+    const start_hole = requireInt(body.start_hole ?? 1, 'start_hole', 1, 18)
+    const visible_to_friends = optionalBoolean(body.visible_to_friends, 'visible_to_friends')
+    const scheduled_at = optionalISO(body.scheduled_at, 'scheduled_at')
+    const teams = body.teams ?? null
 
     log.info('=== CREATE ROUND ===')
-    log.info('Course:', course_id, 'Players:', players.length, 'Mode:', play_mode)
+    log.info('Course:', course_id, 'Players:', validatedPlayers.length, 'Mode:', play_mode)
     log.debug('Created by:', user.id)
-    log.debug('Players:', JSON.stringify(players))
+    log.debug('Players:', JSON.stringify(validatedPlayers))
     log.debug('Game types:', JSON.stringify(game_types))
     log.debug('Holes:', holes_to_play, 'Start:', start_hole)
 
@@ -61,18 +66,15 @@ serve(async (req) => {
     // STEP 1: Process players — create guest players if needed
     // -------------------------------------------------------
     const processedPlayers = await Promise.all(
-      players.map(async (player: any) => {
+      validatedPlayers.map(async (player) => {
         if (!player.player_id && player.guest_info) {
-          // Guest player: create in players table
-          // Guests are identified by: user_id = creator, email = NULL, phone = NULL
           const { data: newGuest, error: guestError } = await supabaseAdmin
             .from('players')
             .insert({
               display_name: player.guest_info.display_name,
               handicap_index: player.guest_info.handicap_index,
               gender: player.guest_info.gender || null,
-              user_id: user.id, // Link guest to creator
-              // email and phone intentionally left NULL (guest identifier pattern)
+              user_id: user.id,
             })
             .select()
             .single()
@@ -90,9 +92,8 @@ serve(async (req) => {
           }
         }
 
-        // Existing player — pass through
         return {
-          player_id: player.player_id,
+          player_id: player.player_id!,
           tee_id: player.tee_id,
         }
       })
@@ -190,9 +191,8 @@ serve(async (req) => {
       // Map original player IDs to team IDs
       // We need to handle that guest player IDs may have changed
       teams.team1?.forEach((pid: string) => {
-        // Find the processed player (may be a guest with new ID)
         const processed = processedPlayers.find(
-          (p: any, idx: number) => players[idx]?.player_id === pid || players[idx]?.guest_info?.id === pid
+          (p: any, idx: number) => validatedPlayers[idx]?.player_id === pid
         )
         if (processed) {
           playerTeamMap[processed.player_id] = createdTeams[0].id
@@ -200,7 +200,7 @@ serve(async (req) => {
       })
       teams.team2?.forEach((pid: string) => {
         const processed = processedPlayers.find(
-          (p: any, idx: number) => players[idx]?.player_id === pid || players[idx]?.guest_info?.id === pid
+          (p: any, idx: number) => validatedPlayers[idx]?.player_id === pid
         )
         if (processed) {
           playerTeamMap[processed.player_id] = createdTeams[1].id
@@ -294,12 +294,13 @@ serve(async (req) => {
       }
     )
   } catch (error) {
+    const status = error instanceof ValidationError ? 422 : 400
     log.error('=== CREATE ROUND ERROR ===', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
+        status,
       }
     )
   }

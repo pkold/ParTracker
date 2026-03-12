@@ -2,6 +2,11 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { createLogger } from '../_shared/log.ts'
 import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
+import {
+  ValidationError, requireString, optionalString, requireArray,
+  requireEnum, requireInt, optionalISO, requireUUID,
+  validateTournamentPlayer,
+} from '../_shared/validate.ts'
 
 const log = createLogger('create-tournament')
 
@@ -36,33 +41,34 @@ serve(async (req) => {
     const rl = checkRateLimit(user.id, { maxRequests: 10 })
     if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
-    // Parse the request body
-    const {
-      name,
-      description,
-      rounds_to_count,
-      aggregation_rule,
-      best_n,
-      scoring_mode,
-      start_date,
-      end_date,
-      default_course_id,
-      default_game_types,
-      points_table,
-      bonus_config,
-      players, // Array of { player_id, team_name? }
-    } = await req.json()
+    // Parse and validate the request body
+    const body = await req.json()
+
+    const name = requireString(body.name, 'name', 500)
+    const description = optionalString(body.description, 'description', 10000)
+    const rounds_to_count = requireInt(body.rounds_to_count ?? 6, 'rounds_to_count', 1, 999)
+    const aggregation_rule = requireEnum(body.aggregation_rule ?? 'sum', 'aggregation_rule', ['sum', 'best_n', 'average'])
+    const best_n = aggregation_rule === 'best_n' ? requireInt(body.best_n, 'best_n', 1, 999) : null
+    const scoring_mode = requireEnum(body.scoring_mode ?? 'individual', 'scoring_mode', ['individual', 'team'])
+    const start_date = optionalISO(body.start_date, 'start_date')
+    const end_date = optionalISO(body.end_date, 'end_date')
+    const default_course_id = body.default_course_id ? requireUUID(body.default_course_id, 'default_course_id') : null
+    const default_game_types = body.default_game_types != null ? requireArray(body.default_game_types, 'default_game_types', 0, 10) : []
+    const points_table = body.points_table ?? null
+    const bonus_config = body.bonus_config ?? null
+    const players = requireArray(body.players, 'players', 1, 200)
+    const validatedPlayers = players.map((p, i) => validateTournamentPlayer(p, i))
 
     log.info('=== CREATE TOURNAMENT ===')
-    log.info('Name:', name, 'Players:', players.length, 'Mode:', scoring_mode)
+    log.info('Name:', name, 'Players:', validatedPlayers.length, 'Mode:', scoring_mode)
     log.debug('Created by:', user.id)
-    log.debug('Players:', JSON.stringify(players))
+    log.debug('Players:', JSON.stringify(validatedPlayers))
 
     // -------------------------------------------------------
     // STEP 1: Create guest players if needed
     // -------------------------------------------------------
     const processedPlayers = await Promise.all(
-      players.map(async (p: any) => {
+      validatedPlayers.map(async (p) => {
         if (!p.player_id && p.guest_info) {
           const { data: newGuest, error: guestError } = await supabaseAdmin
             .from('players')
@@ -226,12 +232,13 @@ serve(async (req) => {
       }
     )
   } catch (error) {
+    const status = error instanceof ValidationError ? 422 : 400
     log.error('=== CREATE TOURNAMENT ERROR ===', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
+        status,
       }
     )
   }

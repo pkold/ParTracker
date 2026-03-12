@@ -2,6 +2,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { createLogger } from '../_shared/log.ts'
 import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
+import { ValidationError, requireUUID } from '../_shared/validate.ts'
 
 const log = createLogger('calculate-standings')
 
@@ -31,8 +32,8 @@ serve(async (req) => {
     const rl = checkRateLimit(user.id, { maxRequests: 20 })
     if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
-    const { round_id } = await req.json()
-    if (!round_id) throw new Error('round_id is required')
+    const body = await req.json()
+    const round_id = requireUUID(body.round_id, 'round_id')
 
     log.info('=== CALCULATE STANDINGS ===')
     log.info('Round ID:', round_id)
@@ -451,12 +452,13 @@ serve(async (req) => {
       }
     )
   } catch (error) {
+    const status = error instanceof ValidationError ? 422 : 400
     log.error('=== CALCULATE STANDINGS ERROR ===', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
+        status,
       }
     )
   }

@@ -31,7 +31,6 @@ serve(async (req) => {
     // Parse the request body
     const {
       course_id,
-      created_by,
       game_types,       // Array of strings like ['skins', 'stableford']
       players,          // Array of { player_id, tee_id, guest_info }
       teams,            // { team1: [playerIds], team2: [playerIds] } or null
@@ -45,7 +44,7 @@ serve(async (req) => {
 
     console.log('=== CREATE ROUND ===')
     console.log('Course:', course_id)
-    console.log('Created by:', created_by)
+    console.log('Created by:', user.id)
     console.log('Players:', JSON.stringify(players))
     console.log('Game types:', JSON.stringify(game_types))
     console.log('Play mode:', play_mode)
@@ -110,7 +109,7 @@ serve(async (req) => {
     const isScheduled = !!scheduled_at
     const roundInsert = {
       course_id,
-      created_by,
+      created_by: user.id,
       status: isScheduled ? 'scheduled' : 'active',
       scheduled_at: scheduled_at || null,
       holes_played: holes_to_play || 18,

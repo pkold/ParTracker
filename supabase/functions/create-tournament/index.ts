@@ -1,5 +1,14 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createLogger } from '../_shared/log.ts'
+import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
+import {
+  ValidationError, requireString, optionalString, requireArray,
+  requireEnum, requireInt, optionalISO, requireUUID,
+  validateTournamentPlayer,
+} from '../_shared/validate.ts'
+
+const log = createLogger('create-tournament')
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -28,34 +37,38 @@ serve(async (req) => {
       throw new Error('Unauthorized')
     }
 
-    // Parse the request body
-    const {
-      name,
-      description,
-      rounds_to_count,
-      aggregation_rule,
-      best_n,
-      scoring_mode,
-      start_date,
-      end_date,
-      default_course_id,
-      default_game_types,
-      points_table,
-      bonus_config,
-      players, // Array of { player_id, team_name? }
-    } = await req.json()
+    // Rate limit: 10 requests per minute per user
+    const rl = checkRateLimit(user.id, { maxRequests: 10 })
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
-    console.log('=== CREATE TOURNAMENT ===')
-    console.log('Name:', name)
-    console.log('Created by:', user.id)
-    console.log('Players:', JSON.stringify(players))
-    console.log('Scoring mode:', scoring_mode)
+    // Parse and validate the request body
+    const body = await req.json()
+
+    const name = requireString(body.name, 'name', 500)
+    const description = optionalString(body.description, 'description', 10000)
+    const rounds_to_count = requireInt(body.rounds_to_count ?? 6, 'rounds_to_count', 1, 999)
+    const aggregation_rule = requireEnum(body.aggregation_rule ?? 'sum', 'aggregation_rule', ['sum', 'best_n', 'average'])
+    const best_n = aggregation_rule === 'best_n' ? requireInt(body.best_n, 'best_n', 1, 999) : null
+    const scoring_mode = requireEnum(body.scoring_mode ?? 'individual', 'scoring_mode', ['individual', 'team'])
+    const start_date = optionalISO(body.start_date, 'start_date')
+    const end_date = optionalISO(body.end_date, 'end_date')
+    const default_course_id = body.default_course_id ? requireUUID(body.default_course_id, 'default_course_id') : null
+    const default_game_types = body.default_game_types != null ? requireArray(body.default_game_types, 'default_game_types', 0, 10) : []
+    const points_table = body.points_table ?? null
+    const bonus_config = body.bonus_config ?? null
+    const players = requireArray(body.players, 'players', 1, 200)
+    const validatedPlayers = players.map((p, i) => validateTournamentPlayer(p, i))
+
+    log.info('=== CREATE TOURNAMENT ===')
+    log.info('Name:', name, 'Players:', validatedPlayers.length, 'Mode:', scoring_mode)
+    log.debug('Created by:', user.id)
+    log.debug('Players:', JSON.stringify(validatedPlayers))
 
     // -------------------------------------------------------
     // STEP 1: Create guest players if needed
     // -------------------------------------------------------
     const processedPlayers = await Promise.all(
-      players.map(async (p: any) => {
+      validatedPlayers.map(async (p) => {
         if (!p.player_id && p.guest_info) {
           const { data: newGuest, error: guestError } = await supabaseAdmin
             .from('players')
@@ -69,11 +82,11 @@ serve(async (req) => {
             .single()
 
           if (guestError) {
-            console.error('Error creating guest player:', guestError)
+            log.error('Error creating guest player:', guestError)
             throw new Error(`Failed to create guest: ${p.guest_info.display_name}`)
           }
 
-          console.log('Created guest player:', newGuest.id, newGuest.display_name)
+          log.debug('Created guest player:', newGuest.id, newGuest.display_name)
           return { ...p, player_id: newGuest.id }
         }
         return p
@@ -114,7 +127,7 @@ serve(async (req) => {
       status: 'active',
     }
 
-    console.log('Tournament insert:', JSON.stringify(tournamentInsert))
+    log.debug('Tournament insert:', JSON.stringify(tournamentInsert))
 
     const { data: tournament, error: tournamentError } = await supabaseAdmin
       .from('tournaments')
@@ -123,11 +136,11 @@ serve(async (req) => {
       .single()
 
     if (tournamentError) {
-      console.error('Error creating tournament:', tournamentError)
+      log.error('Error creating tournament:', tournamentError)
       throw new Error(`Failed to create tournament: ${tournamentError.message}`)
     }
 
-    console.log('Tournament created:', tournament.id)
+    log.info('Tournament created:', tournament.id)
 
     // -------------------------------------------------------
     // STEP 3: Insert tournament_players
@@ -144,11 +157,11 @@ serve(async (req) => {
         .insert(playersInsert)
 
       if (playersError) {
-        console.error('Error inserting tournament_players:', playersError)
+        log.error('Error inserting tournament_players:', playersError)
         throw new Error(`Failed to add players: ${playersError.message}`)
       }
 
-      console.log('Tournament players added:', processedPlayers.length)
+      log.info('Tournament players added:', processedPlayers.length)
 
       // -------------------------------------------------------
       // STEP 5: Initialize tournament_standings (all zeros)
@@ -171,11 +184,11 @@ serve(async (req) => {
         .insert(standingsInsert)
 
       if (standingsError) {
-        console.error('Error initializing standings:', standingsError)
+        log.error('Error initializing standings:', standingsError)
         throw new Error(`Failed to initialize standings: ${standingsError.message}`)
       }
 
-      console.log('Tournament standings initialized')
+      log.debug('Tournament standings initialized')
 
       // -------------------------------------------------------
       // STEP 6: Initialize tournament_team_standings (if teams)
@@ -198,15 +211,15 @@ serve(async (req) => {
           .insert(teamStandingsInsert)
 
         if (teamStandingsError) {
-          console.error('Error initializing team standings:', teamStandingsError)
+          log.error('Error initializing team standings:', teamStandingsError)
           throw new Error(`Failed to initialize team standings: ${teamStandingsError.message}`)
         }
 
-        console.log('Team standings initialized for:', teamNames)
+        log.debug('Team standings initialized for:', teamNames)
       }
     }
 
-    console.log('=== TOURNAMENT CREATED SUCCESSFULLY ===')
+    log.info('=== TOURNAMENT CREATED SUCCESSFULLY ===')
 
     return new Response(
       JSON.stringify({
@@ -219,12 +232,13 @@ serve(async (req) => {
       }
     )
   } catch (error) {
-    console.error('=== CREATE TOURNAMENT ERROR ===', error)
+    const status = error instanceof ValidationError ? 422 : 400
+    log.error('=== CREATE TOURNAMENT ERROR ===', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
+        status,
       }
     )
   }

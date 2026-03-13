@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
+import { ValidationError, requireUUID, requireString, requireEnum } from '../_shared/validate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -37,6 +39,10 @@ serve(async (req) => {
     if (!user) {
       throw new Error('Not authenticated')
     }
+
+    // Rate limit: 20 requests per minute per user
+    const rl = checkRateLimit(user.id, { maxRequests: 20 })
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
     const { action, ...params } = await req.json()
 
@@ -90,7 +96,7 @@ serve(async (req) => {
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
+        status: error instanceof ValidationError ? 422 : 400,
       }
     )
   }
@@ -105,12 +111,12 @@ async function searchUsers(
   userId: string,
   params: { query: string }
 ) {
-  const { query } = params
-  if (!query || query.trim().length < 2) {
+  const query = requireString(params.query, 'query', 500)
+  if (query.length < 2) {
     throw new Error('Search query must be at least 2 characters')
   }
 
-  const searchTerm = `%${query.trim()}%`
+  const searchTerm = `%${query}%`
 
   const { data, error } = await supabaseAdmin
     .from('players')
@@ -130,10 +136,7 @@ async function sendRequest(
   userId: string,
   params: { addressee_id: string }
 ) {
-  const { addressee_id } = params
-  if (!addressee_id) {
-    throw new Error('Missing required field: addressee_id')
-  }
+  const addressee_id = requireUUID(params.addressee_id, 'addressee_id')
 
   if (addressee_id === userId) {
     throw new Error('Cannot send friend request to yourself')
@@ -187,14 +190,8 @@ async function respondRequest(
   userId: string,
   params: { friendship_id: string; response: string }
 ) {
-  const { friendship_id, response } = params
-  if (!friendship_id || !response) {
-    throw new Error('Missing required fields: friendship_id, response')
-  }
-
-  if (!['accepted', 'declined'].includes(response)) {
-    throw new Error('Response must be "accepted" or "declined"')
-  }
+  const friendship_id = requireUUID(params.friendship_id, 'friendship_id')
+  const response = requireEnum(params.response, 'response', ['accepted', 'declined'])
 
   // Verify this request is addressed to the current user and is pending
   const { data: friendship, error: fetchError } = await supabaseAdmin
@@ -233,10 +230,7 @@ async function unfriend(
   userId: string,
   params: { friendship_id: string }
 ) {
-  const { friendship_id } = params
-  if (!friendship_id) {
-    throw new Error('Missing required field: friendship_id')
-  }
+  const friendship_id = requireUUID(params.friendship_id, 'friendship_id')
 
   // Verify user is part of this friendship
   const { data: friendship, error: fetchError } = await supabaseAdmin
@@ -387,10 +381,7 @@ async function redeemInviteCode(
   userId: string,
   params: { code: string }
 ) {
-  const { code } = params
-  if (!code) {
-    throw new Error('Missing required field: code')
-  }
+  const code = requireString(params.code, 'code', 20)
 
   // Look up the invite code
   const { data: invite, error: lookupError } = await supabaseAdmin

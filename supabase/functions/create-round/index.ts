@@ -1,5 +1,13 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createLogger } from '../_shared/log.ts'
+import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
+import {
+  ValidationError, requireUUID, requireArray, requireEnum,
+  optionalBoolean, optionalISO, requireInt, validateRoundPlayer,
+} from '../_shared/validate.ts'
+
+const log = createLogger('create-round')
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -28,55 +36,55 @@ serve(async (req) => {
       throw new Error('Unauthorized')
     }
 
-    // Parse the request body
-    const {
-      course_id,
-      created_by,
-      game_types,       // Array of strings like ['skins', 'stableford']
-      players,          // Array of { player_id, tee_id, guest_info }
-      teams,            // { team1: [playerIds], team2: [playerIds] } or null
-      play_mode,        // 'individual' or 'team'
-      carryover_enabled,
-      holes_to_play,    // 9 or 18
-      start_hole,       // 1-18
-      visible_to_friends,
-      scheduled_at,
-    } = await req.json()
+    // Rate limit: 10 requests per minute per user
+    const rl = checkRateLimit(user.id, { maxRequests: 10 })
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
-    console.log('=== CREATE ROUND ===')
-    console.log('Course:', course_id)
-    console.log('Created by:', created_by)
-    console.log('Players:', JSON.stringify(players))
-    console.log('Game types:', JSON.stringify(game_types))
-    console.log('Play mode:', play_mode)
-    console.log('Holes:', holes_to_play, 'Start:', start_hole)
+    // Parse and validate the request body
+    const body = await req.json()
+
+    const course_id = requireUUID(body.course_id, 'course_id')
+    const players = requireArray(body.players, 'players', 1, 100)
+    const validatedPlayers = players.map((p, i) => validateRoundPlayer(p, i))
+    const game_types = body.game_types != null ? requireArray(body.game_types, 'game_types', 0, 10) : []
+    const play_mode = requireEnum(body.play_mode ?? 'individual', 'play_mode', ['individual', 'team'])
+    const carryover_enabled = optionalBoolean(body.carryover_enabled, 'carryover_enabled')
+    const holes_to_play = requireInt(body.holes_to_play ?? 18, 'holes_to_play', 1, 18)
+    const start_hole = requireInt(body.start_hole ?? 1, 'start_hole', 1, 18)
+    const visible_to_friends = optionalBoolean(body.visible_to_friends, 'visible_to_friends')
+    const scheduled_at = optionalISO(body.scheduled_at, 'scheduled_at')
+    const teams = body.teams ?? null
+
+    log.info('=== CREATE ROUND ===')
+    log.info('Course:', course_id, 'Players:', validatedPlayers.length, 'Mode:', play_mode)
+    log.debug('Created by:', user.id)
+    log.debug('Players:', JSON.stringify(validatedPlayers))
+    log.debug('Game types:', JSON.stringify(game_types))
+    log.debug('Holes:', holes_to_play, 'Start:', start_hole)
 
     // -------------------------------------------------------
     // STEP 1: Process players — create guest players if needed
     // -------------------------------------------------------
     const processedPlayers = await Promise.all(
-      players.map(async (player: any) => {
+      validatedPlayers.map(async (player) => {
         if (!player.player_id && player.guest_info) {
-          // Guest player: create in players table
-          // Guests are identified by: user_id = creator, email = NULL, phone = NULL
           const { data: newGuest, error: guestError } = await supabaseAdmin
             .from('players')
             .insert({
               display_name: player.guest_info.display_name,
               handicap_index: player.guest_info.handicap_index,
               gender: player.guest_info.gender || null,
-              user_id: user.id, // Link guest to creator
-              // email and phone intentionally left NULL (guest identifier pattern)
+              user_id: user.id,
             })
             .select()
             .single()
 
           if (guestError) {
-            console.error('Error creating guest player:', guestError)
+            log.error('Error creating guest player:', guestError)
             throw new Error(`Failed to create guest: ${player.guest_info.display_name}`)
           }
 
-          console.log('Created guest player:', newGuest.id, newGuest.display_name)
+          log.debug('Created guest player:', newGuest.id, newGuest.display_name)
 
           return {
             player_id: newGuest.id,
@@ -84,9 +92,8 @@ serve(async (req) => {
           }
         }
 
-        // Existing player — pass through
         return {
-          player_id: player.player_id,
+          player_id: player.player_id!,
           tee_id: player.tee_id,
         }
       })
@@ -110,7 +117,7 @@ serve(async (req) => {
     const isScheduled = !!scheduled_at
     const roundInsert = {
       course_id,
-      created_by,
+      created_by: user.id,
       status: isScheduled ? 'scheduled' : 'active',
       scheduled_at: scheduled_at || null,
       holes_played: holes_to_play || 18,
@@ -132,7 +139,7 @@ serve(async (req) => {
       visible_to_friends: visible_to_friends || false,
     }
 
-    console.log('Round insert data:', JSON.stringify(roundInsert))
+    log.debug('Round insert data:', JSON.stringify(roundInsert))
 
     // -------------------------------------------------------
     // STEP 3: Create the round
@@ -144,11 +151,11 @@ serve(async (req) => {
       .single()
 
     if (roundError) {
-      console.error('Error creating round:', roundError)
+      log.error('Error creating round:', roundError)
       throw new Error(`Failed to create round: ${roundError.message}`)
     }
 
-    console.log('Round created:', round.id)
+    log.info('Round created:', round.id)
 
     // -------------------------------------------------------
     // STEP 4: Create teams (if team play)
@@ -167,12 +174,12 @@ serve(async (req) => {
         .select()
 
       if (teamsError) {
-        console.error('Error creating teams:', teamsError)
+        log.error('Error creating teams:', teamsError)
         throw new Error(`Failed to create teams: ${teamsError.message}`)
       }
 
       createdTeams = teamData || []
-      console.log('Teams created:', createdTeams.map(t => t.id))
+      log.debug('Teams created:', createdTeams.map(t => t.id))
     }
 
     // -------------------------------------------------------
@@ -184,9 +191,8 @@ serve(async (req) => {
       // Map original player IDs to team IDs
       // We need to handle that guest player IDs may have changed
       teams.team1?.forEach((pid: string) => {
-        // Find the processed player (may be a guest with new ID)
         const processed = processedPlayers.find(
-          (p: any, idx: number) => players[idx]?.player_id === pid || players[idx]?.guest_info?.id === pid
+          (p: any, idx: number) => validatedPlayers[idx]?.player_id === pid
         )
         if (processed) {
           playerTeamMap[processed.player_id] = createdTeams[0].id
@@ -194,7 +200,7 @@ serve(async (req) => {
       })
       teams.team2?.forEach((pid: string) => {
         const processed = processedPlayers.find(
-          (p: any, idx: number) => players[idx]?.player_id === pid || players[idx]?.guest_info?.id === pid
+          (p: any, idx: number) => validatedPlayers[idx]?.player_id === pid
         )
         if (processed) {
           playerTeamMap[processed.player_id] = createdTeams[1].id
@@ -212,7 +218,7 @@ serve(async (req) => {
           .single()
 
         if (teeError || !tee) {
-          console.error('Error finding tee:', teeError, 'ID:', player.tee_id)
+          log.error('Error finding tee:', teeError, 'ID:', player.tee_id)
           throw new Error(`Tee not found for id: ${player.tee_id}`)
         }
 
@@ -224,7 +230,7 @@ serve(async (req) => {
           .single()
 
         if (playerError) {
-          console.error('Error fetching player:', playerError)
+          log.error('Error fetching player:', playerError)
           throw new Error(`Failed to fetch player: ${player.player_id}`)
         }
 
@@ -244,7 +250,7 @@ serve(async (req) => {
           (Number(handicapIndex) * slopeRating) / 113 + (Number(courseRating) - tee.par)
         )
 
-        console.log(`Player ${player.player_id}: HCP ${handicapIndex} → Playing HCP ${playingHcp} (slope: ${slopeRating}, CR: ${courseRating}, par: ${tee.par}, gender: ${playerData?.gender || 'null'})`)
+        log.debug(`Player ${player.player_id}: HCP ${handicapIndex} → Playing HCP ${playingHcp} (slope: ${slopeRating}, CR: ${courseRating}, par: ${tee.par}, gender: ${playerData?.gender || 'null'})`)
 
         return {
           round_id: round.id,
@@ -258,20 +264,18 @@ serve(async (req) => {
       })
     )
 
-    console.log('Inserting round_players:', JSON.stringify(roundPlayersData))
+    log.debug('Inserting round_players:', JSON.stringify(roundPlayersData))
 
     const { error: playersInsertError } = await supabaseAdmin
       .from('round_players')
       .insert(roundPlayersData)
 
     if (playersInsertError) {
-      console.error('Error inserting round_players:', playersInsertError)
+      log.error('Error inserting round_players:', playersInsertError)
       throw new Error(`Failed to add players: ${playersInsertError.message}`)
     }
 
-    console.log('=== ROUND CREATED SUCCESSFULLY ===')
-    console.log('Round ID:', round.id)
-    console.log('Players:', roundPlayersData.length)
+    log.info('Round created successfully:', round.id, 'with', roundPlayersData.length, 'players')
 
     // Return success response
     return new Response(
@@ -290,12 +294,13 @@ serve(async (req) => {
       }
     )
   } catch (error) {
-    console.error('=== CREATE ROUND ERROR ===', error)
+    const status = error instanceof ValidationError ? 422 : 400
+    log.error('=== CREATE ROUND ERROR ===', error)
     return new Response(
       JSON.stringify({ error: error.message }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
+        status,
       }
     )
   }

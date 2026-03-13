@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { checkRateLimit, rateLimitResponse } from '../_shared/rate-limit.ts'
+import { ValidationError, requireUUID, requireInt } from '../_shared/validate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,19 +40,17 @@ serve(async (req) => {
       throw new Error('Not authenticated')
     }
 
-    const body = await req.json()
-    const {
-      round_id,
-      player_id,
-      hole_no,
-      strokes,
-      client_event_id, // For offline sync idempotency
-    } = body
+    // Rate limit: 60 requests per minute per user (frequent during play)
+    const rl = checkRateLimit(user.id, { maxRequests: 60 })
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterMs!, corsHeaders)
 
-    // Validation (strokes can be 0 for pick-up, hole_no can be any positive int)
-    if (!round_id || !player_id || !hole_no || strokes == null) {
-      throw new Error('Missing required fields: round_id, player_id, hole_no, strokes')
-    }
+    const body = await req.json()
+
+    const round_id = requireUUID(body.round_id, 'round_id')
+    const player_id = requireUUID(body.player_id, 'player_id')
+    const hole_no = requireInt(body.hole_no, 'hole_no', 1, 18)
+    const strokes = requireInt(body.strokes ?? null, 'strokes', 0, 99)
+    const client_event_id = body.client_event_id ?? null
 
     // Verify user has access to this round
 const { data: hasAccess } = await supabaseAdmin.rpc('is_round_member', {
@@ -112,7 +112,7 @@ if (!hasAccess) {
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
+        status: error instanceof ValidationError ? 422 : 400,
       }
     )
   }

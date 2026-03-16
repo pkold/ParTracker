@@ -118,7 +118,8 @@ async function searchUsers(
 
   const searchTerm = `%${query}%`
 
-  const { data, error } = await supabaseAdmin
+  // Search players by name or email
+  const { data: playerResults, error } = await supabaseAdmin
     .from('players')
     .select('id, user_id, display_name, email, handicap_index')
     .or(`email.ilike.${searchTerm},display_name.ilike.${searchTerm}`)
@@ -128,7 +129,53 @@ async function searchUsers(
 
   if (error) throw error
 
-  return { users: data }
+  // Also search by club name (via home_courses → courses)
+  const { data: clubResults } = await supabaseAdmin
+    .from('home_courses')
+    .select('user_id, courses(name, club)')
+    .ilike('courses.club', searchTerm)
+
+  // Get player info for club matches not already in results
+  const existingUserIds = new Set((playerResults || []).map((p: any) => p.user_id))
+  const clubUserIds = (clubResults || [])
+    .filter((hc: any) => hc.courses && !existingUserIds.has(hc.user_id) && hc.user_id !== userId)
+    .map((hc: any) => hc.user_id)
+
+  let clubPlayers: any[] = []
+  if (clubUserIds.length > 0) {
+    const { data: extraPlayers } = await supabaseAdmin
+      .from('players')
+      .select('id, user_id, display_name, email, handicap_index')
+      .in('user_id', clubUserIds)
+      .not('email', 'is', null)
+      .limit(10)
+    clubPlayers = extraPlayers || []
+  }
+
+  // Fetch home course/club for all result users
+  const allUsers = [...(playerResults || []), ...clubPlayers]
+  const allUserIds = allUsers.map((p: any) => p.user_id)
+
+  let clubMap = new Map<string, string>()
+  if (allUserIds.length > 0) {
+    const { data: homeCourses } = await supabaseAdmin
+      .from('home_courses')
+      .select('user_id, courses(club)')
+      .in('user_id', allUserIds)
+
+    for (const hc of (homeCourses || [])) {
+      if ((hc as any).courses?.club) {
+        clubMap.set(hc.user_id, (hc as any).courses.club)
+      }
+    }
+  }
+
+  const users = allUsers.map((p: any) => ({
+    ...p,
+    club: clubMap.get(p.user_id) || null,
+  }))
+
+  return { users }
 }
 
 async function sendRequest(

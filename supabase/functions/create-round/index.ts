@@ -57,7 +57,7 @@ serve(async (req) => {
     const teams = body.teams ?? null
 
     log.info('=== CREATE ROUND ===')
-    log.info('Course:', course_id, 'Players:', validatedPlayers.length, 'Mode:', play_mode)
+    log.info('Course:', course_id, 'Players:', validatedPlayers.length, 'Mode:', play_mode, 'Name:', round_name)
     log.debug('Created by:', user.id)
     log.debug('Players:', JSON.stringify(validatedPlayers))
     log.debug('Game types:', JSON.stringify(game_types))
@@ -139,7 +139,7 @@ serve(async (req) => {
       visibility: 'private',
       visible_to_friends: visible_to_friends || false,
       // Optional round name
-      ...(round_name ? { name: round_name } : {}),
+      name: round_name,
     }
 
     log.debug('Round insert data:', JSON.stringify(roundInsert))

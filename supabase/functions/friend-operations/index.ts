@@ -129,17 +129,27 @@ async function searchUsers(
 
   if (error) throw error
 
-  // Also search by club name (via home_courses → courses)
-  const { data: clubResults } = await supabaseAdmin
-    .from('home_courses')
-    .select('user_id, courses(name, club)')
-    .ilike('courses.club', searchTerm)
+  // Also search by club name: courses → home_courses → players
+  const { data: matchingCourses } = await supabaseAdmin
+    .from('courses')
+    .select('id')
+    .ilike('club', searchTerm)
+    .limit(20)
 
-  // Get player info for club matches not already in results
   const existingUserIds = new Set((playerResults || []).map((p: any) => p.user_id))
-  const clubUserIds = (clubResults || [])
-    .filter((hc: any) => hc.courses && !existingUserIds.has(hc.user_id) && hc.user_id !== userId)
-    .map((hc: any) => hc.user_id)
+  let clubUserIds: string[] = []
+
+  if (matchingCourses && matchingCourses.length > 0) {
+    const courseIds = matchingCourses.map((c: any) => c.id)
+    const { data: homeCourseUsers } = await supabaseAdmin
+      .from('home_courses')
+      .select('user_id')
+      .in('course_id', courseIds)
+
+    clubUserIds = (homeCourseUsers || [])
+      .map((hc: any) => hc.user_id)
+      .filter((uid: string) => !existingUserIds.has(uid) && uid !== userId)
+  }
 
   let clubPlayers: any[] = []
   if (clubUserIds.length > 0) {

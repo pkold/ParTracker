@@ -53,6 +53,7 @@ serve(async (req) => {
     const start_hole = requireInt(body.start_hole ?? 1, 'start_hole', 1, 18)
     const visible_to_friends = optionalBoolean(body.visible_to_friends, 'visible_to_friends')
     const scheduled_at = optionalISO(body.scheduled_at, 'scheduled_at')
+    const round_name = typeof body.name === 'string' ? body.name.trim().slice(0, 50) || null : null
     const teams = body.teams ?? null
 
     log.info('=== CREATE ROUND ===')
@@ -137,6 +138,8 @@ serve(async (req) => {
       // Visibility
       visibility: 'private',
       visible_to_friends: visible_to_friends || false,
+      // Optional round name
+      ...(round_name ? { name: round_name } : {}),
     }
 
     log.debug('Round insert data:', JSON.stringify(roundInsert))

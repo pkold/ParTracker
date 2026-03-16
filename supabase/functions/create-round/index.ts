@@ -164,8 +164,8 @@ serve(async (req) => {
 
     if (isTeamPlay && teams && teams.team1 && teams.team2) {
       const teamsInsert = [
-        { round_id: round.id, name: 'Team 1' },
-        { round_id: round.id, name: 'Team 2' },
+        { round_id: round.id, name: teams.team1Name || 'Team 1' },
+        { round_id: round.id, name: teams.team2Name || 'Team 2' },
       ]
 
       const { data: teamData, error: teamsError } = await supabaseAdmin

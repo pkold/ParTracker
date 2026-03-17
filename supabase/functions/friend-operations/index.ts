@@ -129,41 +129,8 @@ async function searchUsers(
 
   if (error) throw error
 
-  // Also search by club name: courses → home_courses → players
-  const { data: matchingCourses } = await supabaseAdmin
-    .from('courses')
-    .select('id')
-    .ilike('club', searchTerm)
-    .limit(20)
-
-  const existingUserIds = new Set((playerResults || []).map((p: any) => p.user_id))
-  let clubUserIds: string[] = []
-
-  if (matchingCourses && matchingCourses.length > 0) {
-    const courseIds = matchingCourses.map((c: any) => c.id)
-    const { data: homeCourseUsers } = await supabaseAdmin
-      .from('home_courses')
-      .select('user_id')
-      .in('course_id', courseIds)
-
-    clubUserIds = (homeCourseUsers || [])
-      .map((hc: any) => hc.user_id)
-      .filter((uid: string) => !existingUserIds.has(uid) && uid !== userId)
-  }
-
-  let clubPlayers: any[] = []
-  if (clubUserIds.length > 0) {
-    const { data: extraPlayers } = await supabaseAdmin
-      .from('players')
-      .select('id, user_id, display_name, email, handicap_index')
-      .in('user_id', clubUserIds)
-      .not('email', 'is', null)
-      .limit(10)
-    clubPlayers = extraPlayers || []
-  }
-
   // Fetch home course/club for all result users
-  const allUsers = [...(playerResults || []), ...clubPlayers]
+  const allUsers = playerResults || []
   const allUserIds = allUsers.map((p: any) => p.user_id)
 
   let clubMap = new Map<string, string>()

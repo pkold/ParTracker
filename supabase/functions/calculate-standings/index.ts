@@ -66,7 +66,6 @@ serve(async (req) => {
     if (tError || !tournament) throw new Error('Tournament not found')
 
     const pointsTable: { rank: number; points: number }[] = tournament.points_table || []
-    const bonusConfig = tournament.bonus_config || {}
     const aggregationRule = tournament.aggregation_rule
     const bestN = tournament.best_n
 
@@ -147,9 +146,6 @@ serve(async (req) => {
     const playerRoundsWon: Record<string, number> = {}
     const playerStablefordTotal: Record<string, number> = {}
     const playerRoundsPlayed: Record<string, number> = {}
-    // Track per-round rank for hot streak calculation
-    const playerRoundRanks: Record<string, number[]> = {}
-
     // Initialize
     playerIds.forEach((pid: string) => {
       playerRoundPoints[pid] = []
@@ -157,11 +153,7 @@ serve(async (req) => {
       playerRoundsWon[pid] = 0
       playerStablefordTotal[pid] = 0
       playerRoundsPlayed[pid] = 0
-      playerRoundRanks[pid] = []
     })
-
-    // Track round winners for bonus
-    const roundWinners: Record<string, string[]> = {} // round_id → [player_ids]
 
     for (const roundId of completedRoundIds) {
       const results = resultsByRound[roundId] || []
@@ -182,12 +174,9 @@ serve(async (req) => {
         playerRoundPoints[pid].push(pts)
         playerStablefordTotal[pid] += results[i].stableford_total
         playerRoundsPlayed[pid]++
-        playerRoundRanks[pid].push(currentRank)
 
         // Track round winners (rank 1)
         if (currentRank === 1) {
-          if (!roundWinners[roundId]) roundWinners[roundId] = []
-          roundWinners[roundId].push(pid)
           playerRoundsWon[pid]++
         }
       }
@@ -224,95 +213,10 @@ serve(async (req) => {
     })
 
     // -------------------------------------------------------
-    // STEP 7: Calculate bonus points
+    // STEP 7: Bonus points disabled — all set to 0
     // -------------------------------------------------------
     const playerBonusPoints: Record<string, number> = {}
     playerIds.forEach((pid: string) => { playerBonusPoints[pid] = 0 })
-
-    // Bonus: round_winner
-    if (bonusConfig.round_winner) {
-      Object.values(roundWinners).forEach((winners: string[]) => {
-        winners.forEach((pid: string) => {
-          playerBonusPoints[pid] += bonusConfig.round_winner
-        })
-      })
-    }
-
-    // Bonus: skins_leader (per round)
-    if (bonusConfig.skins_leader) {
-      for (const roundId of completedRoundIds) {
-        const { data: skinsData } = await supabaseAdmin
-          .from('skins_results')
-          .select('winner_player_id, skin_awarded_value')
-          .eq('round_id', roundId)
-          .not('winner_player_id', 'is', null)
-
-        if (skinsData && skinsData.length > 0) {
-          const skinsTotals: Record<string, number> = {}
-          skinsData.forEach((s: any) => {
-            skinsTotals[s.winner_player_id] = (skinsTotals[s.winner_player_id] || 0) + (s.skin_awarded_value || 0)
-          })
-          const maxSkins = Math.max(...Object.values(skinsTotals))
-          if (maxSkins > 0) {
-            Object.entries(skinsTotals).forEach(([pid, total]) => {
-              if (total === maxSkins && playerIds.includes(pid)) {
-                playerBonusPoints[pid] += bonusConfig.skins_leader
-              }
-            })
-          }
-        }
-      }
-    }
-
-    // Bonus: eagle (net eagle from hole_results)
-    if (bonusConfig.eagle) {
-      const { data: holeResults } = await supabaseAdmin
-        .from('hole_results')
-        .select('player_id, net_strokes, par')
-        .in('round_id', completedRoundIds)
-        .in('player_id', playerIds)
-
-      holeResults?.forEach((hr: any) => {
-        if (hr.par && hr.net_strokes && (hr.par - hr.net_strokes) >= 2) {
-          playerBonusPoints[hr.player_id] += bonusConfig.eagle
-        }
-      })
-    }
-
-    // Bonus: hole_in_one (strokes = 1 in scores)
-    if (bonusConfig.hole_in_one) {
-      const { data: aceScores } = await supabaseAdmin
-        .from('scores')
-        .select('player_id')
-        .in('round_id', completedRoundIds)
-        .in('player_id', playerIds)
-        .eq('strokes', 1)
-
-      aceScores?.forEach((s: any) => {
-        playerBonusPoints[s.player_id] += bonusConfig.hole_in_one
-      })
-    }
-
-    // Bonus: hot_streak (3+ consecutive top-3 finishes)
-    if (bonusConfig.hot_streak) {
-      playerIds.forEach((pid: string) => {
-        const ranks = playerRoundRanks[pid]
-        let streak = 0
-        let awarded = false
-        for (const rank of ranks) {
-          if (rank <= 3) {
-            streak++
-            if (streak >= 3 && !awarded) {
-              playerBonusPoints[pid] += bonusConfig.hot_streak
-              awarded = true
-            }
-          } else {
-            streak = 0
-            awarded = false
-          }
-        }
-      })
-    }
 
     // Skins total value across tournament
     const playerSkinsTotalValue: Record<string, number> = {}
@@ -337,7 +241,7 @@ serve(async (req) => {
       player_id: pid,
       season_points: playerTotalSeasonPoints[pid],
       bonus_points: playerBonusPoints[pid],
-      total_points: playerTotalSeasonPoints[pid] + playerBonusPoints[pid],
+      total_points: playerTotalSeasonPoints[pid],
       rounds_played: playerRoundsPlayed[pid],
       rounds_won: playerRoundsWon[pid],
       stableford_total: playerStablefordTotal[pid],
@@ -391,13 +295,12 @@ serve(async (req) => {
     if (teamNames.length > 0) {
       const teamStandings = teamNames.map((teamName: string) => {
         const teamMembers = standings.filter(s => playerTeamMap[s.player_id] === teamName)
-        const teamSeasonPts = teamMembers.reduce((sum, m) => sum + m.total_points, 0)
-        const teamBonusPts = teamMembers.reduce((sum, m) => sum + m.bonus_points, 0)
+        const teamSeasonPts = teamMembers.reduce((sum, m) => sum + m.season_points, 0)
         const teamRoundsPlayed = Math.max(...teamMembers.map(m => m.rounds_played), 0)
         return {
           team_name: teamName,
-          season_points: teamSeasonPts - teamBonusPts, // Just season component
-          bonus_points: teamBonusPts,
+          season_points: teamSeasonPts,
+          bonus_points: 0,
           total_points: teamSeasonPts,
           rounds_played: teamRoundsPlayed,
         }

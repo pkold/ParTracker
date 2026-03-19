@@ -54,6 +54,8 @@ serve(async (req) => {
     const visible_to_friends = optionalBoolean(body.visible_to_friends, 'visible_to_friends')
     const scheduled_at = optionalISO(body.scheduled_at, 'scheduled_at')
     const round_name = typeof body.name === 'string' ? body.name.trim().slice(0, 50) || null : null
+    const playing_format = typeof body.playing_format === 'string' ? body.playing_format : 'stableford'
+    const format_config = body.format_config ?? null
     const teams = body.teams ?? null
 
     log.info('=== CREATE ROUND ===')
@@ -140,6 +142,9 @@ serve(async (req) => {
       visible_to_friends: visible_to_friends || false,
       // Optional round name
       name: round_name,
+      // Playing format (new system)
+      playing_format: playing_format,
+      format_config: format_config,
     }
 
     log.debug('Round insert data:', JSON.stringify(roundInsert))

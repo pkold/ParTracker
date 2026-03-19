@@ -108,6 +108,9 @@ serve(async (req) => {
     // The rounds table has specific columns for scoring config,
     // NOT a separate sidegames table.
 
+    // FuldNyborg: override settings
+    const isFuldNyborg = playing_format === 'fuldnyborg'
+
     // Determine scoring format from game_types
     const hasMatchPlay = game_types?.includes('match_play') || false
     const hasStableford = game_types?.includes('stableford') || true // Default
@@ -133,10 +136,10 @@ serve(async (req) => {
       team_scoring_mode: isTeamPlay ? 'bestball' : 'bestball', // Default
       // Match play configuration
       match_play_enabled: hasMatchPlay,
-      // Skins configuration
-      skins_enabled: hasMatchPlay && carryover_enabled,
-      skins_type: 'net',                      // Default to net skins
-      skins_rollover: carryover_enabled || true,
+      // Skins configuration — FuldNyborg always enables skins with carryover
+      skins_enabled: isFuldNyborg || (hasMatchPlay && carryover_enabled),
+      skins_type: 'net',
+      skins_rollover: isFuldNyborg || carryover_enabled || true,
       // Visibility
       visibility: 'private',
       visible_to_friends: visible_to_friends || false,

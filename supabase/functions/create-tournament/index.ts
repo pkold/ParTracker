@@ -55,6 +55,7 @@ serve(async (req) => {
     const default_course_id = body.default_course_id ? requireUUID(body.default_course_id, 'default_course_id') : null
     const default_game_types = body.default_game_types != null ? requireArray(body.default_game_types, 'default_game_types', 0, 10) : []
     const points_table = body.points_table ?? null
+    const scoring_split = body.scoring_split ?? null
     const players = requireArray(body.players, 'players', 1, 200)
     const validatedPlayers = players.map((p, i) => validateTournamentPlayer(p, i))
 
@@ -123,6 +124,7 @@ serve(async (req) => {
       default_game_types: default_game_types || [],
       points_table: finalPointsTable,
       bonus_config: {},
+      scoring_split: scoring_split,
       status: 'active',
     }
 

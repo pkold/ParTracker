@@ -68,8 +68,9 @@ serve(async (req) => {
     const pointsTable: { rank: number; points: number }[] = tournament.points_table || []
     const aggregationRule = tournament.aggregation_rule
     const bestN = tournament.best_n
+    const scoringSplit = tournament.scoring_split || null
 
-    log.debug('Aggregation:', aggregationRule, 'Best N:', bestN)
+    log.debug('Aggregation:', aggregationRule, 'Best N:', bestN, 'Scoring split:', scoringSplit ? 'yes' : 'no')
 
     // -------------------------------------------------------
     // STEP 3: Get all completed rounds for this tournament
@@ -84,17 +85,27 @@ serve(async (req) => {
 
     const roundIds = allTournamentRounds?.map((r: any) => r.round_id) || []
 
-    // Check which rounds are completed
+    // Check which rounds are completed (also fetch scoring_format for split filtering)
     const { data: completedRounds, error: crError } = await supabaseAdmin
       .from('rounds')
-      .select('id')
+      .select('id, scoring_format')
       .in('id', roundIds)
       .eq('status', 'completed')
 
     if (crError) throw new Error('Failed to check round statuses')
 
     const completedRoundIds = completedRounds?.map((r: any) => r.id) || []
+    const roundFormatMap: Record<string, string> = {}
+    completedRounds?.forEach((r: any) => { roundFormatMap[r.id] = r.scoring_format })
     log.info('Completed rounds:', completedRoundIds.length, 'of', roundIds.length)
+
+    // When scoring_split is set, filter rounds by format
+    const individualRoundIds = scoringSplit
+      ? completedRoundIds.filter((rid: string) => roundFormatMap[rid] === scoringSplit.individual_format)
+      : completedRoundIds
+    const teamRoundIds = scoringSplit
+      ? completedRoundIds.filter((rid: string) => roundFormatMap[rid] === scoringSplit.team_format)
+      : completedRoundIds
 
     if (completedRoundIds.length === 0) {
       return new Response(
@@ -155,7 +166,7 @@ serve(async (req) => {
       playerRoundsPlayed[pid] = 0
     })
 
-    for (const roundId of completedRoundIds) {
+    for (const roundId of individualRoundIds) {
       const results = resultsByRound[roundId] || []
       if (results.length === 0) continue
 
@@ -293,18 +304,92 @@ serve(async (req) => {
     const teamNames = [...new Set(Object.values(playerTeamMap))]
 
     if (teamNames.length > 0) {
-      const teamStandings = teamNames.map((teamName: string) => {
-        const teamMembers = standings.filter(s => playerTeamMap[s.player_id] === teamName)
-        const teamSeasonPts = teamMembers.reduce((sum, m) => sum + m.season_points, 0)
-        const teamRoundsPlayed = Math.max(...teamMembers.map(m => m.rounds_played), 0)
-        return {
-          team_name: teamName,
-          season_points: teamSeasonPts,
-          bonus_points: 0,
-          total_points: teamSeasonPts,
-          rounds_played: teamRoundsPlayed,
+      let teamStandings: { team_name: string; season_points: number; bonus_points: number; total_points: number; rounds_played: number }[]
+
+      if (scoringSplit) {
+        // FedEx-style team points: rank teams per round, award points from team points table
+        const teamPointsMax = scoringSplit.team_points_max || 100
+        // Generate team points table (e.g. 100, 70, 49... decaying)
+        const teamPointsTable: number[] = []
+        let tp = teamPointsMax
+        for (let i = 0; i < teamNames.length; i++) {
+          teamPointsTable.push(Math.max(Math.round(tp), 5))
+          tp = tp * 0.7
         }
-      })
+
+        // Fetch team_results for team rounds
+        const { data: teamResults } = await supabaseAdmin
+          .from('team_results')
+          .select('round_id, team_id, stableford_total, gross_total')
+          .in('round_id', teamRoundIds)
+
+        // Map team_id to team_name via round_players
+        const { data: rpForTeams } = await supabaseAdmin
+          .from('round_players')
+          .select('team_id, player_id')
+          .in('round_id', teamRoundIds)
+          .not('team_id', 'is', null)
+
+        // Build team_id → team_name mapping
+        const teamIdToName: Record<string, string> = {}
+        rpForTeams?.forEach((rp: any) => {
+          if (rp.team_id && playerTeamMap[rp.player_id]) {
+            teamIdToName[rp.team_id] = playerTeamMap[rp.player_id]
+          }
+        })
+
+        // Per-round team FedEx points
+        const teamTotalPoints: Record<string, number> = {}
+        const teamRoundsPlayedMap: Record<string, number> = {}
+        teamNames.forEach((tn) => { teamTotalPoints[tn] = 0; teamRoundsPlayedMap[tn] = 0 })
+
+        for (const roundId of teamRoundIds) {
+          const roundTeamResults = (teamResults || [])
+            .filter((tr: any) => tr.round_id === roundId)
+            .map((tr: any) => ({
+              team_name: teamIdToName[tr.team_id] || 'Unknown',
+              score: scoringSplit.team_format === 'stroke_play' ? tr.gross_total : tr.stableford_total,
+            }))
+
+          if (roundTeamResults.length === 0) continue
+
+          // Rank: for stableford = highest wins, for stroke_play = lowest wins
+          if (scoringSplit.team_format === 'stroke_play') {
+            roundTeamResults.sort((a: any, b: any) => a.score - b.score)
+          } else {
+            roundTeamResults.sort((a: any, b: any) => b.score - a.score)
+          }
+
+          // Assign FedEx points per team rank
+          roundTeamResults.forEach((tr: any, idx: number) => {
+            const pts = teamPointsTable[idx] || 5
+            teamTotalPoints[tr.team_name] = (teamTotalPoints[tr.team_name] || 0) + pts
+            teamRoundsPlayedMap[tr.team_name] = (teamRoundsPlayedMap[tr.team_name] || 0) + 1
+          })
+        }
+
+        teamStandings = teamNames.map((tn) => ({
+          team_name: tn,
+          season_points: teamTotalPoints[tn] || 0,
+          bonus_points: 0,
+          total_points: teamTotalPoints[tn] || 0,
+          rounds_played: teamRoundsPlayedMap[tn] || 0,
+        }))
+      } else {
+        // Default: sum individual season points per team
+        teamStandings = teamNames.map((teamName: string) => {
+          const teamMembers = standings.filter(s => playerTeamMap[s.player_id] === teamName)
+          const teamSeasonPts = teamMembers.reduce((sum, m) => sum + m.season_points, 0)
+          const teamRoundsPlayed = Math.max(...teamMembers.map(m => m.rounds_played), 0)
+          return {
+            team_name: teamName,
+            season_points: teamSeasonPts,
+            bonus_points: 0,
+            total_points: teamSeasonPts,
+            rounds_played: teamRoundsPlayed,
+          }
+        })
+      }
 
       // Sort and rank teams
       teamStandings.sort((a, b) => b.total_points - a.total_points)

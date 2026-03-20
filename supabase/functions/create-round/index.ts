@@ -54,8 +54,9 @@ serve(async (req) => {
     const visible_to_friends = optionalBoolean(body.visible_to_friends, 'visible_to_friends')
     const scheduled_at = optionalISO(body.scheduled_at, 'scheduled_at')
     const round_name = typeof body.name === 'string' ? body.name.trim().slice(0, 50) || null : null
-    const playing_format = typeof body.playing_format === 'string' ? body.playing_format : 'stableford'
-    const format_config = body.format_config ?? null
+    const VALID_FORMATS = ['stroke_play', 'stableford', 'match_play', 'skins', 'fourball', 'irish_rumble', 'foursome', 'greensome', 'scramble', 'texas_scramble', 'fuldnyborg']
+    const playing_format = VALID_FORMATS.includes(body.playing_format) ? body.playing_format : 'stableford'
+    const format_config = typeof body.format_config === 'object' && body.format_config !== null ? body.format_config : null
     const teams = body.teams ?? null
 
     log.info('=== CREATE ROUND ===')

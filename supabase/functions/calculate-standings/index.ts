@@ -323,58 +323,101 @@ serve(async (req) => {
           .select('round_id, team_id, stableford_total, gross_total')
           .in('round_id', teamRoundIds)
 
-        // Map team_id to team_name via round_players
-        const { data: rpForTeams } = await supabaseAdmin
-          .from('round_players')
-          .select('team_id, player_id')
-          .in('round_id', teamRoundIds)
-          .not('team_id', 'is', null)
+        // If no team_results exist (rounds are individual, not team-mode),
+        // fall back to ranking teams by summing their members' individual scores per round
+        const hasTeamResults = (teamResults || []).length > 0
 
-        // Build team_id → team_name mapping
-        const teamIdToName: Record<string, string> = {}
-        rpForTeams?.forEach((rp: any) => {
-          if (rp.team_id && playerTeamMap[rp.player_id]) {
-            teamIdToName[rp.team_id] = playerTeamMap[rp.player_id]
-          }
-        })
+        if (hasTeamResults) {
+          // Map team_id to team_name via round_players
+          const { data: rpForTeams } = await supabaseAdmin
+            .from('round_players')
+            .select('team_id, player_id')
+            .in('round_id', teamRoundIds)
+            .not('team_id', 'is', null)
 
-        // Per-round team FedEx points
-        const teamTotalPoints: Record<string, number> = {}
-        const teamRoundsPlayedMap: Record<string, number> = {}
-        teamNames.forEach((tn) => { teamTotalPoints[tn] = 0; teamRoundsPlayedMap[tn] = 0 })
-
-        for (const roundId of teamRoundIds) {
-          const roundTeamResults = (teamResults || [])
-            .filter((tr: any) => tr.round_id === roundId)
-            .map((tr: any) => ({
-              team_name: teamIdToName[tr.team_id] || 'Unknown',
-              score: scoringSplit.team_format === 'stroke_play' ? tr.gross_total : tr.stableford_total,
-            }))
-
-          if (roundTeamResults.length === 0) continue
-
-          // Rank: for stableford = highest wins, for stroke_play = lowest wins
-          if (scoringSplit.team_format === 'stroke_play') {
-            roundTeamResults.sort((a: any, b: any) => a.score - b.score)
-          } else {
-            roundTeamResults.sort((a: any, b: any) => b.score - a.score)
-          }
-
-          // Assign FedEx points per team rank
-          roundTeamResults.forEach((tr: any, idx: number) => {
-            const pts = teamPointsTable[idx] || 5
-            teamTotalPoints[tr.team_name] = (teamTotalPoints[tr.team_name] || 0) + pts
-            teamRoundsPlayedMap[tr.team_name] = (teamRoundsPlayedMap[tr.team_name] || 0) + 1
+          // Build team_id → team_name mapping
+          const teamIdToName: Record<string, string> = {}
+          rpForTeams?.forEach((rp: any) => {
+            if (rp.team_id && playerTeamMap[rp.player_id]) {
+              teamIdToName[rp.team_id] = playerTeamMap[rp.player_id]
+            }
           })
-        }
 
-        teamStandings = teamNames.map((tn) => ({
-          team_name: tn,
-          season_points: teamTotalPoints[tn] || 0,
-          bonus_points: 0,
-          total_points: teamTotalPoints[tn] || 0,
-          rounds_played: teamRoundsPlayedMap[tn] || 0,
-        }))
+          // Per-round team FedEx points
+          const teamTotalPoints: Record<string, number> = {}
+          const teamRoundsPlayedMap: Record<string, number> = {}
+          teamNames.forEach((tn) => { teamTotalPoints[tn] = 0; teamRoundsPlayedMap[tn] = 0 })
+
+          for (const roundId of teamRoundIds) {
+            const roundTeamResults = (teamResults || [])
+              .filter((tr: any) => tr.round_id === roundId)
+              .map((tr: any) => ({
+                team_name: teamIdToName[tr.team_id] || 'Unknown',
+                score: scoringSplit.team_format === 'stroke_play' ? tr.gross_total : tr.stableford_total,
+              }))
+
+            if (roundTeamResults.length === 0) continue
+
+            // Rank: for stableford = highest wins, for stroke_play = lowest wins
+            if (scoringSplit.team_format === 'stroke_play') {
+              roundTeamResults.sort((a: any, b: any) => a.score - b.score)
+            } else {
+              roundTeamResults.sort((a: any, b: any) => b.score - a.score)
+            }
+
+            // Assign FedEx points per team rank
+            roundTeamResults.forEach((tr: any, idx: number) => {
+              const pts = teamPointsTable[idx] || 5
+              teamTotalPoints[tr.team_name] = (teamTotalPoints[tr.team_name] || 0) + pts
+              teamRoundsPlayedMap[tr.team_name] = (teamRoundsPlayedMap[tr.team_name] || 0) + 1
+            })
+          }
+
+          teamStandings = teamNames.map((tn) => ({
+            team_name: tn,
+            season_points: teamTotalPoints[tn] || 0,
+            bonus_points: 0,
+            total_points: teamTotalPoints[tn] || 0,
+            rounds_played: teamRoundsPlayedMap[tn] || 0,
+          }))
+        } else {
+          // No team_results: rank teams per round by summing individual stableford per team
+          const teamTotalPoints: Record<string, number> = {}
+          const teamRoundsPlayedMap: Record<string, number> = {}
+          teamNames.forEach((tn) => { teamTotalPoints[tn] = 0; teamRoundsPlayedMap[tn] = 0 })
+
+          for (const roundId of completedRoundIds) {
+            const results = resultsByRound[roundId] || []
+            if (results.length === 0) continue
+
+            // Sum stableford per team for this round
+            const teamRoundScores: { team_name: string; score: number }[] = teamNames.map((tn) => {
+              const memberResults = results.filter((r) => playerTeamMap[r.player_id] === tn)
+              const totalScore = memberResults.reduce((sum, r) => sum + r.stableford_total, 0)
+              return { team_name: tn, score: totalScore }
+            }).filter((t) => t.score > 0)
+
+            if (teamRoundScores.length === 0) continue
+
+            // Rank: highest stableford wins
+            teamRoundScores.sort((a, b) => b.score - a.score)
+
+            // Assign FedEx points per team rank
+            teamRoundScores.forEach((tr, idx) => {
+              const pts = teamPointsTable[idx] || 5
+              teamTotalPoints[tr.team_name] = (teamTotalPoints[tr.team_name] || 0) + pts
+              teamRoundsPlayedMap[tr.team_name] = (teamRoundsPlayedMap[tr.team_name] || 0) + 1
+            })
+          }
+
+          teamStandings = teamNames.map((tn) => ({
+            team_name: tn,
+            season_points: teamTotalPoints[tn] || 0,
+            bonus_points: 0,
+            total_points: teamTotalPoints[tn] || 0,
+            rounds_played: teamRoundsPlayedMap[tn] || 0,
+          }))
+        }
       } else {
         // Default: sum individual season points per team
         teamStandings = teamNames.map((teamName: string) => {

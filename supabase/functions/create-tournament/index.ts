@@ -49,7 +49,7 @@ serve(async (req) => {
     const rounds_to_count = requireInt(body.rounds_to_count ?? 6, 'rounds_to_count', 1, 999)
     const aggregation_rule = requireEnum(body.aggregation_rule ?? 'sum', 'aggregation_rule', ['sum', 'best_n', 'average'])
     const best_n = aggregation_rule === 'best_n' ? requireInt(body.best_n, 'best_n', 1, 999) : null
-    const scoring_mode = requireEnum(body.scoring_mode ?? 'individual', 'scoring_mode', ['individual', 'team'])
+    const scoring_mode = requireEnum(body.scoring_mode ?? 'individual', 'scoring_mode', ['individual', 'team', 'both'])
     const start_date = optionalISO(body.start_date, 'start_date')
     const end_date = optionalISO(body.end_date, 'end_date')
     const default_course_id = body.default_course_id ? requireUUID(body.default_course_id, 'default_course_id') : null

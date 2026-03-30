@@ -56,6 +56,8 @@ serve(async (req) => {
     const default_game_types = body.default_game_types != null ? requireArray(body.default_game_types, 'default_game_types', 0, 10) : []
     const points_table = body.points_table ?? null
     const scoring_split = body.scoring_split ?? null
+    const primary_win_criterion = body.primary_win_criterion ?? 'stableford_individual'
+    const secondary_win_criteria = body.secondary_win_criteria ?? []
     const players = requireArray(body.players, 'players', 1, 200)
     const validatedPlayers = players.map((p, i) => validateTournamentPlayer(p, i))
 
@@ -125,6 +127,8 @@ serve(async (req) => {
       points_table: finalPointsTable,
       bonus_config: {},
       scoring_split: scoring_split,
+      primary_win_criterion: primary_win_criterion,
+      secondary_win_criteria: secondary_win_criteria,
       status: 'active',
     }
 
